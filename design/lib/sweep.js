@@ -1,7 +1,8 @@
 'use strict';
-// The scanner's sprite sheet: 12 frames side by side, each a narrow column
+// The scanner's sprite sheet: 24 frames side by side, each a narrow column
 // with a blue band going down (a sharp leading edge, a long soft tail, 35 %
-// at its peak). The view stretches a frame over the rect being edited.
+// at its peak). The view stretches a frame over the rect being edited and
+// plays it at FPS: 24 frames at 20 fps = one sweep every 1.2 s.
 //
 // The cell is tiny on purpose: the app upscales a cell by a whole factor (at
 // most 32) before stretching it, so a small cell keeps every frame a few KB
@@ -11,7 +12,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { encode } = require('./crop');
 
-const FRAMES = 12;
+const FRAMES = 24;
+const FPS = 20;
 const CELL_W = 2;
 const CELL_H = 64;
 const SHEET = 'cache/sweep.png';
@@ -31,7 +33,7 @@ function sheet() {
   const px = Buffer.alloc(w * CELL_H * 4);
   for (let f = 0; f < FRAMES; f++) {
     // from just above the top (empty) to just past the bottom (only the tail)
-    const center = -0.1 * CELL_H + (f * 1.15 * CELL_H) / (FRAMES - 1);
+    const center = -0.05 * CELL_H + (f * 1.05 * CELL_H) / (FRAMES - 1);
     for (let y = 0; y < CELL_H; y++) {
       const a = alphaAt(y, center);
       if (!a) continue;
@@ -63,4 +65,4 @@ function ensure(pluginDir) {
   return file;
 }
 
-module.exports = { ensure, sheet, SHEET, FRAMES, CELL_W, CELL_H };
+module.exports = { ensure, sheet, SHEET, FRAMES, FPS, CELL_W, CELL_H };

@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const scanner = require('../lib/scanner');
-const marks = require('../lib/marks');
+const marksMod = require('../lib/marks');
 
 const DIR = path.resolve('/w/acme/design/sac');
 const OTHER = path.resolve('/w/acme/design/outro');
@@ -15,7 +15,10 @@ const ctx = (o = {}) => ({
   ...o,
 });
 const hook = (tool, file, tabId = 't1') => ({ tabId, payload: { tool_name: tool, tool_input: { file_path: file } } });
-const make = () => scanner.create({ timeoutMs: 30000, onChange: () => {} });
+// a fresh marks store per test: no state shared through the plugin's own one
+let marks;
+test.beforeEach(() => { marks = marksMod.create(); });
+const make = (o = {}) => scanner.create({ timeoutMs: 30000, onChange: () => {}, marks, ...o });
 
 test('board edit → scan the whole board', () => {
   const s = make();
@@ -53,6 +56,8 @@ test('a design_ref mark narrows the scan to its element, and expires', () => {
   const late = s.onHook(hook('Edit', path.join(DIR, 'boards', 'settings.html')), ctx({ now: 1000 + marks.TTL_MS + 1 }));
   assert.deepStrictEqual(late, [{ dir: DIR, board: 'settings', rect: null }]);
   s.clear(DIR);
+  // the plugin's own store is not touched by these tests
+  assert.strictEqual(marksMod.get('t1', 1000), null);
 });
 
 test('nothing for files outside the canvas, other tools, unlinked tabs or tabs of a closed canvas', () => {
@@ -87,7 +92,7 @@ test('the render of a board ends its scan and clears its mark', () => {
 
 test('a scan times out after 30 s and tells onChange', async () => {
   const changed = [];
-  const s = scanner.create({ timeoutMs: 20, onChange: (dir) => changed.push(dir) });
+  const s = make({ timeoutMs: 20, onChange: (dir) => changed.push(dir) });
   s.onHook(hook('Edit', path.join(DIR, 'boards', 'login.html')), ctx({ now: Date.now() }));
   assert.strictEqual(s.active(DIR).length, 1);
   await new Promise((r) => setTimeout(r, 60));
@@ -106,4 +111,63 @@ test('a relative file_path is read against the hook cwd', () => {
   const evt = { tabId: 't1', payload: { cwd: DIR, tool_name: 'Edit', tool_input: { file_path: 'boards/inbox.html' } } };
   assert.deepStrictEqual(s.onHook(evt, ctx()).map((x) => x.board), ['inbox']);
   s.clear(DIR);
+});
+
+const post = (name, tool, file, tabId = 't1') => ({ tabId, name, payload: { tool_name: tool, tool_input: { file_path: file } } });
+
+test('PostToolUseFailure ends that tab+file scan at once', () => {
+  const s = make();
+  const comp = path.join(DIR, 'components', 'NavItem.html');
+  const board = path.join(DIR, 'boards', 'login.html');
+  s.onHook(hook('Edit', comp), ctx());
+  s.onHook(hook('Write', board), ctx());
+  assert.strictEqual(s.active(DIR, 1000).length, 3);
+  // another tab or another file: nothing
+  assert.deepStrictEqual(s.finish(post('PostToolUseFailure', 'Edit', comp, 't9'), ctx()), []);
+  assert.deepStrictEqual(s.finish(post('PostToolUseFailure', 'Edit', path.join(DIR, 'boards', 'inbox.html')), ctx()), []);
+  assert.strictEqual(s.active(DIR, 1000).length, 3);
+  assert.deepStrictEqual(s.finish(post('PostToolUseFailure', 'Edit', comp), ctx()), [DIR]);
+  assert.deepStrictEqual(s.active(DIR, 1000), [{ board: 'login', rect: null }]);
+  s.clear(DIR);
+});
+
+test('PostToolUse leaves a short grace: no render in it → the scan goes (no-op edit)', async () => {
+  const changed = [];
+  const s = make({ graceMs: 30, onChange: (dir) => changed.push(dir) });
+  const file = path.join(DIR, 'boards', 'inbox.html');
+  s.onHook(hook('Edit', file), ctx({ now: Date.now() }));
+  assert.deepStrictEqual(s.finish(post('PostToolUse', 'Edit', file), ctx({ now: Date.now() })), []);
+  assert.strictEqual(s.active(DIR).length, 1, 'still scanning during the grace');
+  await new Promise((r) => setTimeout(r, 80));
+  assert.deepStrictEqual(s.active(DIR), []);
+  assert.deepStrictEqual(changed, [DIR]);
+  assert.strictEqual(scanner.GRACE_MS, 3000);
+});
+
+test('PostToolUse then the render inside the grace: ended by the render, no extra onChange', async () => {
+  const changed = [];
+  const s = make({ graceMs: 30, onChange: (dir) => changed.push(dir) });
+  const file = path.join(DIR, 'boards', 'inbox.html');
+  s.onHook(hook('Edit', file), ctx({ now: Date.now() }));
+  s.finish(post('PostToolUse', 'Edit', file), ctx({ now: Date.now() }));
+  assert.strictEqual(s.end('inbox', DIR), true);
+  await new Promise((r) => setTimeout(r, 80));
+  assert.deepStrictEqual(changed, []);
+  // the grace is short by the clock too
+  s.onHook(hook('Edit', file), ctx({ now: 0 }));
+  s.finish(post('PostToolUse', 'Edit', file), ctx({ now: 10 }));
+  assert.deepStrictEqual(s.active(DIR, 10 + 31), []);
+  s.clear(DIR);
+});
+
+test('end with a trailing slash on the canvas dir still clears the mark', () => {
+  const s = make();
+  marks.set('t1', { board: 'inbox', rect: { x: 0, y: 0, w: 1, h: 1 }, canvas: `${DIR}/` }, 1000);
+  s.onHook(hook('Edit', path.join(DIR, 'boards', 'inbox.html')), ctx());
+  assert.strictEqual(s.active(DIR, 1000)[0].rect.w, 1, 'the mark narrowed it');
+  s.end('inbox', `${DIR}/`);
+  assert.strictEqual(marks.get('t1', 1000), null);
+  marks.set('t2', { board: 'inbox', rect: { x: 0, y: 0, w: 1, h: 1 }, canvas: DIR }, 1000);
+  marks.clearBoard('inbox', `${DIR}/`);
+  assert.strictEqual(marks.get('t2', 1000), null);
 });

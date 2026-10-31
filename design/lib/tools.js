@@ -307,7 +307,7 @@ async function ref(args, ctx) {
   try { nodesMap = JSON.parse(fs.readFileSync(path.join(dataDir, 'nodes', `${res.board}.json`), 'utf8')); } catch { /* not rendered yet */ }
   const node = nodesMap && refs.locate(nodesMap.roots, res);
   if (node && node.rect) {
-    marks.set(ctx.tabId, { board: res.board, rect: node.rect, canvas: dir });
+    marks.set(ctx.tabId, { board: res.board, rect: node.rect, canvas: path.resolve(dir) });
     const img = elementImage(dataDir, res.board, node.rect);
     if (img) content.push({ type: 'image', data: img.toString('base64'), mimeType: 'image/png' });
   }

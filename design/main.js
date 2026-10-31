@@ -385,18 +385,22 @@ mx.onNotification('view.action', async ({ viewId, action, values }) => {
   }
 });
 
-// PreToolUse from a tab linked to an open canvas (last.json byTab): scan what it edits.
+// Hooks from a tab linked to an open canvas (last.json byTab): PreToolUse
+// scans what it edits; PostToolUse(Failure) is the edit's own end.
+const HOOKS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure']);
+
 function onHook(e) {
-  if (e.name !== 'PreToolUse') return;
+  if (!HOOKS.has(e.name)) return;
+  const linkedDir = (tab) => state.last.byTab[tab] || null;
+  const redraw = (dirs) => { for (const dir of new Set(dirs)) { const V = viewOf(dir); if (V) render(V); } };
+  if (e.name !== 'PreToolUse') { redraw(scans.finish(e, { linkedDir })); return; }
   const canvases = [];
   for (const V of state.views.values()) {
     if (V.closed || !V.engine || !V.canvas) continue;
     canvases.push({ dir: V.dir, boards: V.canvas.order || [], uses: V.engine.uses || new Map() });
   }
   if (!canvases.length) return;
-  const got = scans.onHook({ tabId: e.tabId, payload: e.payload }, { canvases, linkedDir: (tab) => state.last.byTab[tab] || null });
-  const dirs = new Set(got.map((t) => t.dir));
-  for (const dir of dirs) { const V = viewOf(dir); if (V) render(V); }
+  redraw(scans.onHook({ tabId: e.tabId, payload: e.payload }, { canvases, linkedDir }).map((t) => t.dir));
 }
 
 mx.onNotification('event', (e) => {

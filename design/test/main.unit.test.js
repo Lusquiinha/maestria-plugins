@@ -95,6 +95,15 @@ test('a PreToolUse edit from the linked tab draws a scan until the board renders
     V.engine.emit('board', 'inbox', { light: '/x.png', dark: '/y.png', width: 400, height: 100, rev: 1 });
     await sleep(10);
     assert.deepStrictEqual(updates[updates.length - 1].scans, []);
+    // an edit that fails ends its scan at once
+    hook('tab-c', path.join(dir, 'boards', 'inbox.html'));
+    await sleep(10);
+    assert.strictEqual(updates[updates.length - 1].scans.length, 2);
+    const n = updates.length;
+    main.onHook({ type: 'hook', name: 'PostToolUseFailure', tabId: 'tab-c', payload: { tool_name: 'Edit', tool_input: { file_path: path.join(dir, 'boards', 'inbox.html') } } });
+    await sleep(10);
+    assert.strictEqual(updates.length, n + 1);
+    assert.deepStrictEqual(updates[updates.length - 1].scans, []);
   } finally {
     answer = async () => ({ open: true });
     await main.closeView(V.viewId);

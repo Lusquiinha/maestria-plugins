@@ -19,22 +19,26 @@ function pixels(png) {
   };
 }
 
-test('sweep.png decodes: 12 frames side by side, rgba, a blue band moving down', () => {
+test('sweep.png decodes: 24 frames side by side, rgba, a blue band moving down', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'design-sweep-'));
   try {
     const file = sweep.ensure(tmp);
     assert.strictEqual(file, path.join(tmp, 'cache', 'sweep.png'));
     assert.strictEqual(sweep.SHEET, 'cache/sweep.png');
     const png = readPng(fs.readFileSync(file));
-    assert.strictEqual(sweep.FRAMES, 12);
-    assert.strictEqual(png.width, 12 * sweep.CELL_W);
+    assert.strictEqual(sweep.FRAMES, 24);
+    assert.strictEqual(png.width, sweep.FRAMES * sweep.CELL_W);
+    const period = sweep.FRAMES / sweep.FPS;
+    assert.ok(period >= 1.1 && period <= 1.3, `sweep period ${period} s (~1.2 s)`);
+    const ui = fs.readFileSync(path.join(__dirname, '..', 'ui', 'canvas.rfwtxt'), 'utf8');
+    assert.match(ui, new RegExp(`sheet: "${sweep.SHEET}", columns: ${sweep.FRAMES}, rows: 1, frames: ${sweep.FRAMES}, fps: ${sweep.FPS}\\.0`));
     assert.strictEqual(png.height, sweep.CELL_H);
     assert.strictEqual(png.colorType, 6);
     assert.strictEqual(png.bitDepth, 8);
     const px = pixels(png);
     let prevPeak = -Infinity;
     let maxA = 0;
-    for (let f = 1; f < 11; f++) {
+    for (let f = 1; f < sweep.FRAMES - 1; f++) {
       let peak = 0;
       let peakY = 0;
       for (let y = 0; y < png.height; y++) {

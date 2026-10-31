@@ -186,13 +186,14 @@ widget Board = Positioned(
 );
 
 // O scanner: uma faixa azul descendo sobre o que o claude está editando
-// (sweep.png: 12 quadros lado a lado, esticados no retângulo). Só desenha.
+// (sweep.png: 24 quadros lado a lado a 20 fps, uma passada a cada 1,2 s,
+// esticados no retângulo). Só desenha.
 widget Scan = Positioned(
   start: args.s.left,
   top: args.s.top,
   width: args.s.width,
   height: args.s.height,
-  child: Sprite(sheet: "cache/sweep.png", columns: 12, rows: 1, frames: 12, fps: 24.0, loop: true, width: args.s.width, height: args.s.height),
+  child: Sprite(sheet: "cache/sweep.png", columns: 24, rows: 1, frames: 24, fps: 20.0, loop: true, width: args.s.width, height: args.s.height),
 );
 
 // Uma imagem da prancheta; antes da primeira renderização, um quadro vazio.
