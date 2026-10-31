@@ -232,3 +232,100 @@ test('scans: canvas px over each shown image, clipped to it; none by default', (
   assert.deepStrictEqual(out.scans, []);
   noNull(d);
 });
+
+// ---- selection (caps zoomPan + keyListener) --------------------------------
+
+const SEL = { picture: 1, zoomFocus: 1, zoomPan: 1, keyListener: 1 };
+const nd = (k, x, y, w, h, kind, name, children = []) => ({
+  k, rect: { x, y, w, h }, kind, name, file: 'boards/a.html', path: [k], call: null, componentFile: null, children,
+});
+const NODES = {
+  a: { roots: [
+    nd(1, 0, 0, 240, 200, 'component', 'sidebar', [nd(3, 10, 20, 200, 30, 'element', 'span'), nd(4, 10, 60, 200, 30, 'element', 'a')]),
+    nd(2, 260, 0, 1000, 200, 'element', 'main'),
+  ] },
+  b: { roots: [nd(1, 5, 5, 100, 50, 'component', 'toast')] },
+};
+const sel = (o = {}) => build({ caps: o.caps || SEL, ui: o.ui, extra: { nodes: new Map(Object.entries(NODES)), ...o.extra } });
+const img = (b) => ({ left: b.left + 2, top: b.top + 2 + 28 }); // the light image's origin in canvas px
+
+test('hits at the top level: the top components of every board, on both copies', () => {
+  const d = sel();
+  const [a, b] = d.boards;
+  const A = img(a);
+  const B = img(b);
+  const pick = (h) => ({ board: h.board, k: h.k, left: h.left, top: h.top, width: h.width, height: h.height });
+  assert.deepStrictEqual(d.hits.map(pick), [
+    { board: 'a', k: 1, left: A.left, top: A.top, width: 240, height: 200 },
+    { board: 'a', k: 1, left: A.left + 1280 + 24, top: A.top, width: 240, height: 200 },
+    { board: 'a', k: 2, left: A.left + 260, top: A.top, width: 1000, height: 200 },
+    { board: 'a', k: 2, left: A.left + 260 + 1280 + 24, top: A.top, width: 1000, height: 200 },
+    { board: 'b', k: 1, left: B.left + 5, top: B.top + 5, width: 100, height: 50 },
+    { board: 'b', k: 1, left: B.left + 5 + 400 + 24, top: B.top + 5, width: 100, height: 50 },
+  ]);
+  assert.strictEqual(d.hits[0].tap, 'sel:a:1');
+  assert.strictEqual(d.hits[0].dbl, 'in:a:1');
+  assert.strictEqual(d.select, true);
+  assert.deepStrictEqual(d.panButtons, ['middle']);
+  assert.deepStrictEqual(d.keys, ['ctrl+c', 'escape', 'ctrl+0', 'ctrl+=', 'ctrl+-']);
+  assert.deepStrictEqual(d.selections, []);
+  assert.ok(!('selection' in d));
+  noNull(d);
+});
+
+test('a level opened by double-tap: its children are the hits there; other boards keep their top level', () => {
+  const d = sel({ ui: { theme: 'light', level: { board: 'a', k: 1 } } });
+  const A = img(d.boards[0]);
+  assert.deepStrictEqual(d.hits.map((h) => [h.board, h.k, h.left, h.top]), [
+    ['a', 3, A.left + 10, A.top + 20],
+    ['a', 4, A.left + 10, A.top + 60],
+    ['b', 1, img(d.boards[1]).left + 5, img(d.boards[1]).top + 5],
+  ]);
+  // a level that went away (re-render) falls back to the top level
+  const gone = sel({ ui: { theme: 'light', level: { board: 'a', k: 99 } } });
+  assert.deepStrictEqual(gone.hits.map((h) => h.k), [1, 2, 1]);
+});
+
+test('selection: blue rect with the name, in canvas px, over both copies in "both"', () => {
+  const d = sel({ ui: { sel: { board: 'a', k: 3 }, level: { board: 'a', k: 1 } } });
+  const A = img(d.boards[0]);
+  const lt = A.top + 20 - 24; // the name sits in a 24 px strip above the rect
+  assert.deepStrictEqual(d.selection, { left: A.left + 10, top: A.top + 20, width: 200, height: 30, label: 'span', labelTop: lt });
+  assert.deepStrictEqual(d.selections, [
+    { left: A.left + 10, top: A.top + 20, width: 200, height: 30, label: 'span', labelTop: lt },
+    { left: A.left + 10 + 1280 + 24, top: A.top + 20, width: 200, height: 30, label: 'span', labelTop: lt },
+  ]);
+  const dark = sel({ ui: { theme: 'dark', sel: { board: 'b', k: 1 } } });
+  const B = img(dark.boards[1]);
+  assert.deepStrictEqual(dark.selections, [{ left: B.left + 5, top: B.top + 5, width: 100, height: 50, label: 'toast', labelTop: B.top + 5 - 24 }]);
+  const stale = sel({ ui: { sel: { board: 'a', k: 42 } } });
+  assert.deepStrictEqual(stale.selections, []);
+  noNull(d);
+});
+
+test('an old host (no zoomPan/keyListener): no hits, no keys, no panButtons, no selection', () => {
+  for (const caps of [CAPS, { ...CAPS, zoomPan: 1 }, { ...CAPS, keyListener: 1 }]) {
+    const d = sel({ caps, ui: { sel: { board: 'a', k: 1 } } });
+    assert.strictEqual(d.select, false);
+    assert.deepStrictEqual(d.hits, []);
+    assert.deepStrictEqual(d.selections, []);
+    assert.ok(!('panButtons' in d));
+    assert.ok(!('selection' in d));
+    noNull(d);
+  }
+});
+
+test('wire keeps hit k as ints', () => {
+  const w = view.wire(sel());
+  assert.strictEqual(w.hits[0].k, 1);
+  assert.ok(!Number.isInteger(w.hits[0].left));
+});
+
+test('the canvas ui: KeyListener over the canvas, hits as Pressables, middle-drag pan', () => {
+  const lib = fs.readFileSync(path.join(__dirname, '..', 'ui', 'canvas.rfwtxt'), 'utf8').replace(/\/\/.*$/gm, '');
+  assert.match(lib, /KeyListener\(\s*keys: data\.keys,\s*onKey: event "act" \{ a: "key" \}/);
+  assert.match(lib, /panButtons: data\.panButtons/);
+  assert.match(lib, /onTap: event "act" \{ a: args\.h\.tap \}/);
+  assert.match(lib, /onDoubleTap: event "act" \{ a: args\.h\.dbl \}/);
+  assert.match(lib, /onTap: event "act" \{ a: "clear" \}/);
+});

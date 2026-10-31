@@ -320,3 +320,103 @@ test('design_open focuses the session before opening the view', { skip: skipEngi
     cleanup(h, tmp, dataDir);
   }
 });
+
+test('select on the canvas: tap, double-tap, ctrl+c copies the @n code, escape clears, ctrl+0 fits', { skip: skipEngine, timeout: 45000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'design-main-'));
+  const { dataDir } = makeCanvas(tmp);
+  const h = host();
+  try {
+    await h.request('initialize', { apiVersion: 1, rfw: 2, picture: 1, zoomFocus: 1, zoomPan: 1, keyListener: 1, dataDir });
+    await h.request('command.invoke', { command: 'abrir', context: { cwd: '/x', tabId: 't1' } });
+    const open = await h.wait((m) => m.method === 'view.open');
+    assert.match(open.params.rfw.library, /KeyListener\(/);
+    const upd = await h.wait((m) => m.method === 'view.update' && m.params.data && m.params.data.hits && m.params.data.hits.length, 25000);
+    const d0 = upd.params.data;
+    assert.strictEqual(d0.select, true);
+    assert.deepStrictEqual(d0.panButtons, ['middle']);
+    assert.deepStrictEqual(d0.keys, ['ctrl+c', 'escape', 'ctrl+0', 'ctrl+=', 'ctrl+-']);
+    const act = (values) => h.send({ method: 'view.action', params: { viewId: open.params.viewId, action: 'act', values } });
+    const next = (pred, ms) => { const n0 = h.msgs.length; return h.wait((m) => h.msgs.indexOf(m) >= n0 && pred(m), ms); };
+    const upd2 = (pred) => next((m) => m.method === 'view.update' && m.params.data && pred(m.params.data));
+
+    // ctrl+c with nothing selected copies nothing
+    act({ a: 'key', key: 'ctrl+c' });
+    await sleep(200);
+    assert.ok(!h.msgs.some((m) => m.method === 'clipboard.write'));
+
+    // one tap selects a top node; a double-tap on one with children opens it
+    const hash = open.params.viewId.slice('canvas:'.length);
+    const tree = JSON.parse(fs.readFileSync(path.join(dataDir, hash, 'nodes', `${d0.hits[0].board}.json`), 'utf8'));
+    const parent = tree.roots.find((n) => n.children && n.children.length);
+    assert.ok(parent, 'a top node with children');
+    const top = d0.hits.find((x) => x.k === parent.k);
+    let p = upd2((d) => d.selections.length > 0);
+    act({ a: top.tap });
+    const s1 = (await p).params.data;
+    assert.strictEqual(s1.selection.label, parent.name);
+    p = upd2((d) => d.hits.some((x) => x.board === top.board && x.k === parent.children[0].k));
+    act({ a: top.dbl });
+    const inside = (await p).params.data;
+    const ks = new Set(inside.hits.filter((x) => x.board === top.board).map((x) => x.k));
+    assert.deepStrictEqual([...ks].sort(), parent.children.map((n) => n.k).sort(), 'the hits there are its children');
+    // a tap on a child selects it (and ctrl+c copies the child)
+    p = upd2((d) => d.selection && d.selection.label === parent.children[0].name && d.hits.length === inside.hits.length);
+    act({ a: `sel:${top.board}:${parent.children[0].k}` });
+    await p;
+
+    // ctrl+c: clipboard.write with the @n code and a short banner
+    const clip = next((m) => m.method === 'clipboard.write');
+    const ban = next((m) => m.method === 'window.showBanner');
+    act({ a: 'key', key: 'ctrl+c' });
+    const c = await clip;
+    assert.match(c.params.text, /^@n\d+$/);
+    assert.strictEqual((await ban).params.text, `copiado ${c.params.text}`);
+    const refs = JSON.parse(fs.readFileSync(path.join(dataDir, hash, 'refs.json'), 'utf8'));
+    const entry = refs.codes[c.params.text.slice(2)];
+    assert.strictEqual(entry.board, top.board);
+    assert.deepStrictEqual(entry.path, parent.children[0].path);
+
+    // escape clears; a tap on the empty canvas clears too
+    p = upd2((d) => d.selections.length === 0);
+    act({ a: 'key', key: 'escape' });
+    const cleared = (await p).params.data;
+    assert.ok(!('selection' in cleared));
+    assert.deepStrictEqual(cleared.hits.map((x) => x.k), d0.hits.map((x) => x.k), 'back at the top level');
+    p = upd2((d) => d.selections.length > 0);
+    act({ a: top.tap });
+    await p;
+    p = upd2((d) => d.selections.length === 0);
+    act({ a: 'clear' });
+    await p;
+
+    // the zoom keys
+    for (const [key, cmd] of [['ctrl+0', 'fit'], ['ctrl+=', 'in'], ['ctrl+-', 'out']]) {
+      p = upd2((d) => d.zoom.command === cmd);
+      act({ a: 'key', key });
+      await p;
+    }
+    h.proc.stdin.end();
+    assert.strictEqual(await h.exited, 0);
+  } finally {
+    cleanup(h, tmp, dataDir);
+  }
+});
+
+test('an old host (no zoomPan/keyListener): no hits, no keys, no panButtons', { skip: skipEngine, timeout: 45000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'design-main-'));
+  const { dataDir } = makeCanvas(tmp);
+  const h = host();
+  try {
+    await h.request('initialize', { apiVersion: 1, rfw: 2, picture: 1, zoomFocus: 1, dataDir });
+    await h.request('command.invoke', { command: 'abrir', context: { cwd: '/x', tabId: 't1' } });
+    const d = (await rendered(h)).params.data;
+    assert.strictEqual(d.select, false);
+    assert.deepStrictEqual(d.hits, []);
+    assert.deepStrictEqual(d.keys, []);
+    assert.ok(!('panButtons' in d));
+    h.proc.stdin.end();
+    assert.strictEqual(await h.exited, 0);
+  } finally {
+    cleanup(h, tmp, dataDir);
+  }
+});

@@ -23,6 +23,7 @@ const follow = require('./lib/follow');
 const tools = require('./lib/tools');
 const scanner = require('./lib/scanner');
 const sweep = require('./lib/sweep');
+const refs = require('./lib/refs');
 
 const PLUGIN_ID = 'maestria.design';
 const UI_FILE = path.join(__dirname, 'ui', 'canvas.rfwtxt');
@@ -38,7 +39,7 @@ const OUTDATED = [
 ];
 
 const state = {
-  caps: { rfw: false, picture: 0, zoomFocus: 0 },
+  caps: { rfw: false, picture: 0, zoomFocus: 0, zoomPan: 0, keyListener: 0 },
   pluginDir: __dirname,
   dataDir: process.env.MAESTRIA_PLUGIN_DATA || path.join(os.homedir(), '.maestria-rs', 'plugin-data', PLUGIN_ID),
   home: os.homedir(), // where `design: abrir` looks for canvases (Desktop/Work/*/design/*)
@@ -93,8 +94,22 @@ function lastFor({ tabId, cwd }) {
 
 // --- a janela -----------------------------------------------------------------------
 
+// The nodes tree of a board (lib/nodes, written by the engine with each
+// render), cached until the board renders again; null before the first one.
+function nodesOf(V, name) {
+  if (V.nodes.has(name)) return V.nodes.get(name);
+  let tree = null;
+  try { tree = JSON.parse(fs.readFileSync(path.join(dataDirOf(V.dir), 'nodes', `${name}.json`), 'utf8')); } catch { /* not rendered yet */ }
+  if (tree) V.nodes.set(name, tree);
+  return tree;
+}
+
 function data(V) {
-  const d = view.build({ canvas: V.canvas, states: V.states, ui: V.ui, caps: state.caps, hash: V.hash, scans: scans.active(V.dir) });
+  const nodes = new Map();
+  if (state.caps.zoomPan && state.caps.keyListener && V.canvas) {
+    for (const name of V.canvas.order || []) { const t = nodesOf(V, name); if (t) nodes.set(name, t); }
+  }
+  const d = view.build({ canvas: V.canvas, states: V.states, ui: V.ui, caps: state.caps, hash: V.hash, scans: scans.active(V.dir), nodes });
   return view.wire(d);
 }
 
@@ -139,6 +154,10 @@ function highlight(V, name) {
 
 function onBoard(V, name, s) {
   scans.end(name, V.dir); // the new image is here: the scan over it stops
+  // new boxes: node ids of the old render mean nothing now
+  V.nodes.delete(name);
+  if (V.ui.sel && V.ui.sel.board === name) V.ui.sel = null;
+  if (V.ui.level && V.ui.level.board === name) V.ui.level = null;
   if (s) V.states.set(name, s);
   else V.states.delete(name);
   // the first render of the boards that were there at open is not news
@@ -185,7 +204,8 @@ async function openCanvas(input, { tabId, cwd } = {}) {
     title: `design: ${canvas.title}`,
     canvas,
     states: new Map(),
-    ui: { theme: 'both', follow: true, highlight: null, command: null, rev: 0, message: 'abrindo o canvas…' },
+    ui: { theme: 'both', follow: true, highlight: null, command: null, rev: 0, message: 'abrindo o canvas…', sel: null, level: null },
+    nodes: new Map(), // board -> nodes tree (selection)
     engine: null,
     fresh: new Set(),
     lastUserMove: 0,
@@ -277,11 +297,59 @@ async function probeViews() {
 
 // --- as ações da janela ---------------------------------------------------------------
 
-async function onAction(V, act) {
+// "<board>:<k>" -> { board, k } of a node that exists, or null.
+function nodeArg(V, arg) {
+  const j = arg.lastIndexOf(':');
+  const board = arg.slice(0, j);
+  const k = Number(arg.slice(j + 1));
+  if (j <= 0 || !Number.isInteger(k)) return null;
+  const node = view.findNode(nodesOf(V, board), k);
+  return node ? { board, k, node } : null;
+}
+
+function clearSelection(V) {
+  if (!V.ui.sel && !V.ui.level) return null;
+  V.ui.sel = null;
+  V.ui.level = null;
+  return render(V);
+}
+
+// Ctrl+C: the short code of the selected node to the clipboard.
+async function copySelection(V) {
+  const sel = V.ui.sel;
+  const tree = sel && nodesOf(V, sel.board);
+  const node = tree && view.findNode(tree, sel.k);
+  if (!node) return;
+  const code = refs.open(dataDirOf(V.dir), V.dir).codeFor(sel.board, { ...node, via: refs.viaOf(tree.roots, node.k) });
+  await mx.request('clipboard.write', { text: code });
+  banner(`copiado ${code}`);
+}
+
+const KEY_ZOOM = { 'ctrl+0': 'fit', 'ctrl+=': 'in', 'ctrl+-': 'out' };
+
+async function onAction(V, act, vals = {}) {
   const i = act.indexOf(':');
   const verb = i < 0 ? act : act.slice(0, i);
   const arg = i < 0 ? '' : act.slice(i + 1);
   const now = Date.now();
+  if (verb === 'sel' || verb === 'in') {
+    const hit = nodeArg(V, arg);
+    if (!hit) return null;
+    // a node on another board than the opened level sits at that board's top
+    if (V.ui.level && V.ui.level.board !== hit.board) V.ui.level = null;
+    V.ui.sel = { board: hit.board, k: hit.k };
+    // double-tap: its children become the clickable level (a leaf stays selected)
+    if (verb === 'in' && hit.node.children && hit.node.children.length) V.ui.level = { board: hit.board, k: hit.k };
+    return render(V);
+  }
+  if (act === 'clear') return clearSelection(V);
+  if (act === 'key') {
+    const key = String(vals.key || '');
+    if (key === 'ctrl+c') return copySelection(V);
+    if (key === 'escape') return clearSelection(V);
+    if (KEY_ZOOM[key]) { V.lastUserMove = now; return command(V, { kind: KEY_ZOOM[key] }); }
+    return null;
+  }
   // the user's own navigation (zoom keys, double-click, the board menu): follow backs off
   if (verb === 'zoom' && ['in', 'out', 'fit'].includes(arg)) { V.lastUserMove = now; return command(V, { kind: arg }); }
   if (act === 'zoom') {
@@ -392,6 +460,8 @@ mx.onRequest('initialize', (params) => {
     rfw: Number(params.rfw) >= 1,
     picture: Number(params.picture) || 0,
     zoomFocus: Number(params.zoomFocus) || 0,
+    zoomPan: Number(params.zoomPan) || 0,
+    keyListener: Number(params.keyListener) || 0,
   };
   if (params.dataDir) state.dataDir = params.dataDir;
   if (params.pluginDir) state.pluginDir = params.pluginDir;
@@ -423,7 +493,7 @@ mx.onNotification('view.action', async ({ viewId, action, values }) => {
   const vals = values || {};
   const act = String(vals.a || vals.action || action || '');
   try {
-    await onAction(V, act);
+    await onAction(V, act, vals);
   } catch (e) {
     mx.log(`ação ${act}:`, errText(e));
     banner(errText(e));
