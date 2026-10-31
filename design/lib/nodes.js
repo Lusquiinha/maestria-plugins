@@ -40,14 +40,51 @@ const collectScript = `(() => {
 const sameRect = (a, b) => Math.abs(a.x - b.x) <= SAME && Math.abs(a.y - b.y) <= SAME
   && Math.abs(a.w - b.w) <= SAME && Math.abs(a.h - b.h) <= SAME;
 
+// A component call has no element of its own: its box is the union of the
+// boxes at its template's top level (records with `inst`), placed where they
+// sit in the page; nested calls nest (outer is the parent of inner).
+const r1 = (v) => Math.round(v * 10) / 10;
+function withCalls(boxes, sources) {
+  const calls = new Map(); // call k -> synthetic box
+  const out = [];
+  for (const b of boxes) {
+    const s = sources.get(b.k);
+    if (!s || s.inst == null) { out.push(b); continue; }
+    out.push({ ...b, p: s.inst });
+    let rect = b;
+    for (let ck = s.inst; ck != null;) {
+      const cs = sources.get(ck);
+      if (!cs) break;
+      let cb = calls.get(ck);
+      if (!cb) {
+        cb = { k: ck, p: null, x: rect.x, y: rect.y, w: rect.w, h: rect.h, text: false };
+        calls.set(ck, cb);
+        out.push(cb);
+      } else {
+        const x2 = Math.max(cb.x + cb.w, rect.x + rect.w);
+        const y2 = Math.max(cb.y + cb.h, rect.y + rect.h);
+        cb.x = Math.min(cb.x, rect.x);
+        cb.y = Math.min(cb.y, rect.y);
+        cb.w = r1(x2 - cb.x);
+        cb.h = r1(y2 - cb.y);
+      }
+      cb.p = cs.inst != null ? cs.inst : b.p;
+      rect = cb;
+      ck = cs.inst;
+    }
+  }
+  return out;
+}
+
 // boxes: collectScript's output; sources: components.expand(..., { annotate }).sources.
-// Returns { roots: Node[] }, Node = { k, rect, kind, name, file, path, call, children }.
+// Returns { roots: Node[] }, Node = { k, rect, kind, name, file, path, call,
+// componentFile, children } (call/componentFile null for elements).
 // Skipped (their children move up): boxes with no source, and plain element
 // wrappers without own text whose rect equals the parent's. Breadth-first, so
 // the 2000-node cap keeps the outer levels; deeper than 12 levels is dropped.
 function tree(boxes, sources) {
   const kids = new Map(); // parent k (null = top) -> boxes
-  for (const b of boxes) {
+  for (const b of withCalls(boxes, sources)) {
     const list = kids.get(b.p ?? null);
     if (list) list.push(b); else kids.set(b.p ?? null, [b]);
   }
@@ -63,7 +100,7 @@ function tree(boxes, sources) {
   };
   const make = (b) => {
     const s = sources.get(b.k);
-    return { k: b.k, rect: { x: b.x, y: b.y, w: b.w, h: b.h }, kind: s.kind, name: s.name, file: s.file, path: s.path, call: s.call || null, children: [] };
+    return { k: b.k, rect: { x: b.x, y: b.y, w: b.w, h: b.h }, kind: s.kind, name: s.name, file: s.file, path: s.path, call: s.call || null, componentFile: s.componentFile || null, children: [] };
   };
   const roots = [];
   let level = keptUnder(null, null).map((b) => ({ b, into: roots }));

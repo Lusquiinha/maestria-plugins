@@ -197,33 +197,49 @@ function mark(src, fid) {
 }
 
 const S_RE = / data-dn-s="(\d+)\.([\d_]+)"/;
-const C_RE = / data-dn-c="(\d+)\.([\d_]+)\|([A-Za-z0-9]+)"/;
+const C_RE = / data-dn-c="(\d+)"/;
 
 // Replaces the markers with data-dn="k" (every element gets one) and builds
-// the sources map. An element without a marker (html from a {{{raw}}} param)
-// takes the origin of its nearest annotated ancestor.
-function number(html, files) {
+// `sources`: Map<k, record>. Every record names a tag exactly where it is
+// written (file + path, found again with scanElements; tag = what is there):
+// - element: { file, path, tag, kind: 'element', name: tag, inst? }
+// - component call (one per <x-…>, no DOM element of its own; k after the
+//   elements): { file, path, tag, kind: 'component', name, componentFile,
+//   call: { file, path }, inst? }
+// `inst` = k of the call whose template has this at its top level (nodes.tree
+// boxes a call around those). Elements with no marker ({{{raw}}} html) get a
+// data-dn but no record.
+function number(html, files, calls) {
   const sources = new Map();
   let out = '';
   let last = 0;
   let k = 0;
   const at = (fid, p) => ({ file: files[Number(fid)], path: p.split('_').map(Number) });
-  scanElements(html, (t, parent) => {
+  const pending = [];
+  scanElements(html, (t) => {
     const tagText = html.slice(t.nameEnd, t.end);
     const s = S_RE.exec(tagText);
     const c = C_RE.exec(tagText);
-    let src;
-    if (s) src = { ...at(s[1], s[2]), kind: c ? 'component' : 'element', name: c ? c[3] : t.tag };
-    else src = { ...(parent ? { file: parent.file, path: parent.path } : { file: files[0], path: [] }), kind: 'element', name: t.tag };
-    if (s && c) src.call = at(c[1], c[2]);
     k++;
-    sources.set(k, src);
+    if (s) {
+      const src = { ...at(s[1], s[2]), tag: t.tag, kind: 'element', name: t.tag };
+      if (c) pending.push([src, Number(c[1])]);
+      sources.set(k, src);
+    }
     let rest = tagText;
     if (s) rest = rest.replace(S_RE, '');
     if (c) rest = rest.replace(C_RE, '');
     out += html.slice(last, t.nameEnd) + ` data-dn="${k}"` + rest;
     last = t.end;
-    return src;
+  });
+  const base = k; // call i -> k = base + 1 + i
+  for (const [src, i] of pending) src.inst = base + 1 + i;
+  calls.forEach((c, i) => {
+    const where = at(c.fid, c.path);
+    const rec = { ...where, tag: 'x-' + kebab(c.name), kind: 'component', name: c.name,
+      componentFile: `components/${c.name}.html`, call: { ...where } };
+    if (c.parent != null) rec.inst = base + 1 + c.parent;
+    sources.set(base + 1 + i, rec);
   });
   return { html: out + html.slice(last), sources };
 }
@@ -282,15 +298,18 @@ function expand(html, comps, { annotate = false, file = 'boards/board.html' } = 
       let body;
       if (annotate) {
         const attrs = { ...o.attrs };
-        const callS = attrs['data-dn-s'];
-        const callC = attrs['data-dn-c'];
+        const callS = attrs['data-dn-s']; // where this call is written
+        const callC = attrs['data-dn-c']; // the call whose top level this call is at
         delete attrs['data-dn-s'];
         delete attrs['data-dn-c'];
         const tpl = template(name);
         body = substitute(tpl.html, attrs);
-        // the component's top-level elements remember the call (the outermost one wins)
-        const call = callC || (callS ? `${callS}|${name}` : null);
-        if (call) body = body.replace(tpl.top, (m) => `${m} data-dn-c="${call}"`);
+        const m = callS && /^(\d+)\.([\d_]+)$/.exec(callS);
+        if (m) {
+          // every call is its own instance; the template's top-level tags point at it
+          const id = calls.push({ fid: m[1], path: m[2], name, parent: callC != null ? Number(callC) : null }) - 1;
+          body = body.replace(tpl.top, (x) => `${x} data-dn-c="${id}"`);
+        }
       } else body = substitute(comps.get(name), o.attrs);
       for (const s of SLOTS) body = body.split(s).join(inner);
       out += run(body, [...stack, name]);
@@ -300,6 +319,7 @@ function expand(html, comps, { annotate = false, file = 'boards/board.html' } = 
 
   if (!annotate) return { html: run(html, []), uses, errors };
   const files = [file];
+  const calls = []; // { fid, path, name, parent } in the order they are expanded
   const marked = new Map(); // Name -> { html, top }
   function template(name) {
     if (!marked.has(name)) {
@@ -308,7 +328,7 @@ function expand(html, comps, { annotate = false, file = 'boards/board.html' } = 
     }
     return marked.get(name);
   }
-  const out = number(run(mark(html, 0), []), files);
+  const out = number(run(mark(html, 0), []), files, calls);
   return { html: out.html, uses, errors, sources: out.sources };
 }
 
@@ -318,4 +338,4 @@ function dependents(boards, changed) {
   return out;
 }
 
-module.exports = { load, expand, dependents, scanElements, NAME_RE };
+module.exports = { load, expand, dependents, scanElements, kebab, NAME_RE };

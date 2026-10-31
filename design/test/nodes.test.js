@@ -28,7 +28,7 @@ test('tree nests by parent, keeps sources and skips same-rect wrappers', () => {
   assert.strictEqual(roots.length, 1);
   const r = roots[0];
   assert.deepStrictEqual({ ...r, children: undefined }, {
-    k: 1, rect: { x: 0, y: 0, w: 400, h: 300 }, kind: 'element', name: 'div', file: 'boards/b.html', path: [0], call: null, children: undefined,
+    k: 1, rect: { x: 0, y: 0, w: 400, h: 300 }, kind: 'element', name: 'div', file: 'boards/b.html', path: [0], call: null, component: null, children: undefined,
   });
   assert.deepStrictEqual(r.children.map((c) => c.k), [3, 4, 5]);
   assert.deepStrictEqual(r.children[2].call, { file: 'boards/b.html', path: [0, 1] });
@@ -65,7 +65,7 @@ test('tree caps depth at 12', () => {
   assert.strictEqual(nodes.MAX_DEPTH, 12);
 });
 
-test('tree drops boxes with no source and hoists their children', () => {
+test('tree drops boxes with no source (raw-param html) and hoists their children', () => {
   const sources = new Map([el(1, [0]), el(3, [0, 0, 0], 'b')]);
   const { roots } = nodes.tree([box(1, null, 0, 0, 100, 100), box(2, 1, 0, 0, 50, 50), box(3, 2, 0, 0, 10, 10, true)], sources);
   assert.deepStrictEqual(roots[0].children.map((c) => c.k), [3]);
