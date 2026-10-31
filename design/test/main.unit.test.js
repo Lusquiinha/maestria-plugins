@@ -316,3 +316,91 @@ test('novo canvas… from a focused claude tab still opens a fresh claude in the
     await closeAllViews();
   }
 });
+
+// ---- selection --------------------------------------------------------------
+
+async function selCanvas(name) {
+  main.state.caps = { rfw: true, picture: 1, zoomFocus: 1, zoomPan: 1, keyListener: 1 };
+  const dir = path.join(tmp, name);
+  const V = await main.openCanvas(dir, {});
+  const nd = (k, children = []) => ({ k, rect: { x: k, y: k, w: 50, h: 20 }, kind: 'element', name: `n${k}`, file: 'boards/x.html', path: [k], call: null, componentFile: null, children });
+  const nodesDir = path.join(tmp, main.hashOf(dir), 'nodes');
+  fs.mkdirSync(nodesDir, { recursive: true });
+  fs.writeFileSync(path.join(nodesDir, 'x.json'), JSON.stringify({ roots: [nd(1, [nd(3), nd(4)]), nd(2)] }));
+  V.canvas = { title: 't', boards: { x: { x: 0, y: 0, w: 400, h: 200 } }, order: ['x'], warnings: [] };
+  V.states.set('x', { light: 'l.png', dark: 'd.png', width: 400, height: 200, rev: 1 });
+  return V;
+}
+const lastData = (calls) => calls.filter((c) => c.m === 'view.update' && c.p.data).pop().p.data;
+
+test('a double click on a child of the selected node picks it and opens its level', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return { open: true }; };
+  const V = await selCanvas('sel-child');
+  try {
+    await main.onAction(V, 'sel:x:1');
+    let d = lastData(calls);
+    assert.deepStrictEqual(d.hits.filter((h) => h.dbl.startsWith('child:')).map((h) => [h.k, h.tap]), [[3, 'sel:x:1'], [3, 'sel:x:1'], [4, 'sel:x:1'], [4, 'sel:x:1']]);
+    await main.onAction(V, 'child:x:3');
+    assert.deepStrictEqual(V.ui.sel, { board: 'x', k: 3 });
+    assert.deepStrictEqual(V.ui.level, { board: 'x', k: 1 });
+    d = lastData(calls);
+    assert.strictEqual(d.selection.label, 'n3');
+  } finally {
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
+test('a tap that ends a pan does not select (move before or just after it)', async () => {
+  answer = async () => ({ open: true });
+  const V = await selCanvas('sel-pan');
+  try {
+    // onMove arrived first (the user held still before releasing)
+    await main.onAction(V, 'move', { scale: 1, x: 0, y: 0 });
+    await main.onAction(V, 'sel:x:1');
+    assert.strictEqual(V.ui.sel, null, 'dropped right after a move');
+    await sleep(260);
+    await main.onAction(V, 'sel:x:1');
+    assert.deepStrictEqual(V.ui.sel, { board: 'x', k: 1 }, 'a later tap selects');
+    // the click came first and onMove right after: the click is undone
+    await sleep(260);
+    await main.onAction(V, 'sel:x:2');
+    assert.strictEqual(V.ui.sel.k, 2);
+    await main.onAction(V, 'move', { scale: 1, x: 5, y: 5 });
+    assert.deepStrictEqual(V.ui.sel, { board: 'x', k: 1 }, 'back to before the pan');
+    // a clear that ended a pan is undone too
+    await sleep(260);
+    await main.onAction(V, 'clear');
+    await main.onAction(V, 'move', { scale: 1, x: 6, y: 6 });
+    assert.deepStrictEqual(V.ui.sel, { board: 'x', k: 1 });
+    // zoom keys do not block taps (only onMove does)
+    await sleep(260);
+    await main.onAction(V, 'key', { key: 'ctrl+=' });
+    await main.onAction(V, 'sel:x:2');
+    assert.strictEqual(V.ui.sel.k, 2);
+  } finally {
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
+test('the zoom scale from onZoom/onMove shrinks the selection chrome', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return { open: true }; };
+  const V = await selCanvas('sel-scale');
+  try {
+    await main.onAction(V, 'sel:x:2');
+    assert.ok(Math.abs(lastData(calls).selection.border - 2) < 1e-6);
+    await main.onAction(V, 'zoom', { scale: 2 });
+    assert.strictEqual(V.ui.scale, 2);
+    const s = lastData(calls).selection;
+    assert.ok(Math.abs(s.border - 1) < 1e-6 && Math.abs(s.labelH - 12) < 1e-6 && Math.abs(s.fontSize - 7) < 1e-6);
+    await sleep(260);
+    await main.onAction(V, 'move', { scale: 4, x: 0, y: 0 });
+    assert.ok(Math.abs(lastData(calls).selection.border - 0.5) < 1e-6);
+  } finally {
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});

@@ -204,11 +204,13 @@ async function openCanvas(input, { tabId, cwd } = {}) {
     title: `design: ${canvas.title}`,
     canvas,
     states: new Map(),
-    ui: { theme: 'both', follow: true, highlight: null, command: null, rev: 0, message: 'abrindo o canvas…', sel: null, level: null },
+    ui: { theme: 'both', follow: true, highlight: null, command: null, rev: 0, message: 'abrindo o canvas…', sel: null, level: null, scale: 1 },
     nodes: new Map(), // board -> nodes tree (selection)
     engine: null,
     fresh: new Set(),
     lastUserMove: 0,
+    lastTap: null, // { at, sel, level } before the last selecting tap
+    lastMoveAt: 0, // the user's last pan or wheel (onMove): a tap right after it is the pan's end
     lastCommand: 0,
     highlightTimer: null,
     closed: false,
@@ -325,6 +327,17 @@ async function copySelection(V) {
   banner(`copiado ${code}`);
 }
 
+const TAP_AFTER_MOVE_MS = 250;
+
+// The zoom scale (onZoom/onMove), so the selection chrome keeps its size on
+// screen; redraws only when something selected has to follow it.
+function rescale(V, scale) {
+  const s = Number(scale);
+  if (!(s > 0) || s === V.ui.scale) return null;
+  V.ui.scale = s;
+  return V.ui.sel ? render(V) : null;
+}
+
 const KEY_ZOOM = { 'ctrl+0': 'fit', 'ctrl+=': 'in', 'ctrl+-': 'out' };
 
 async function onAction(V, act, vals = {}) {
@@ -332,17 +345,28 @@ async function onAction(V, act, vals = {}) {
   const verb = i < 0 ? act : act.slice(0, i);
   const arg = i < 0 ? '' : act.slice(i + 1);
   const now = Date.now();
-  if (verb === 'sel' || verb === 'in') {
+  // The click that ends a pan (Space+left-drag) is not a selection. onMove
+  // comes 200 ms after the pan settles, so it can arrive before the click
+  // (dropped here) or just after it (the click is undone on `move`).
+  if (['sel', 'in', 'child', 'clear'].includes(verb)) {
+    if (now - V.lastMoveAt < TAP_AFTER_MOVE_MS) return null;
+    V.lastTap = { at: now, sel: V.ui.sel, level: V.ui.level };
+  }
+  if (act === 'clear') return clearSelection(V);
+  if (verb === 'sel' || verb === 'in' || verb === 'child') {
     const hit = nodeArg(V, arg);
     if (!hit) return null;
     // a node on another board than the opened level sits at that board's top
     if (V.ui.level && V.ui.level.board !== hit.board) V.ui.level = null;
     V.ui.sel = { board: hit.board, k: hit.k };
-    // double-tap: its children become the clickable level (a leaf stays selected)
-    if (verb === 'in' && hit.node.children && hit.node.children.length) V.ui.level = { board: hit.board, k: hit.k };
+    // a double click on a child of the selected node (layered over the level)
+    // picks it, and its siblings become the clickable level
+    if (verb === 'child') {
+      const parent = view.parentOf(nodesOf(V, hit.board), hit.k);
+      V.ui.level = parent ? { board: hit.board, k: parent.k } : null;
+    }
     return render(V);
   }
-  if (act === 'clear') return clearSelection(V);
   if (act === 'key') {
     const key = String(vals.key || '');
     if (key === 'ctrl+c') return copySelection(V);
@@ -355,9 +379,22 @@ async function onAction(V, act, vals = {}) {
   if (act === 'zoom') {
     // onZoom also reports the end of our own commands
     if (follow.isUserMove({ now, lastCommand: V.lastCommand })) V.lastUserMove = now;
-    return null;
+    return rescale(V, vals.scale);
   }
-  if (act === 'move') { V.lastUserMove = now; return null; } // onMove only fires for the user's own pan or wheel
+  if (act === 'move') { // onMove only fires for the user's own pan or wheel
+    V.lastUserMove = now;
+    V.lastMoveAt = now;
+    const tap = V.lastTap;
+    V.lastTap = null;
+    if (tap && now - tap.at < TAP_AFTER_MOVE_MS) { // that tap ended this pan: undo it
+      V.ui.sel = tap.sel;
+      V.ui.level = tap.level;
+      const s = Number(vals.scale);
+      if (s > 0) V.ui.scale = s;
+      return render(V);
+    }
+    return rescale(V, vals.scale);
+  }
   if (act === 'seguir') { V.ui.follow = !V.ui.follow; return render(V); }
   if (verb === 'tema' && ['light', 'dark', 'both'].includes(arg)) { V.ui.theme = arg; return render(V); }
   if (verb === 'focus' && arg) { V.lastUserMove = now; return focusBoard(V, arg); }
@@ -578,4 +615,4 @@ for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
 
 mx.start();
 
-module.exports = { state, abrir, openCanvas, focusBoard, viewOf, hashOf, render, closeView, command, onHook, scans };
+module.exports = { state, onAction, abrir, openCanvas, focusBoard, viewOf, hashOf, render, closeView, command, onHook, scans };

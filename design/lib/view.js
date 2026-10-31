@@ -61,6 +61,20 @@ function findNode(tree, k) {
   return tree && k != null ? walk(tree.roots) : null;
 }
 
+// The parent of node `k` (null at the top or when missing).
+function parentOf(tree, k) {
+  const walk = (list, parent) => {
+    for (const n of list || []) {
+      if (n.k === k) return { parent };
+      const r = walk(n.children, n);
+      if (r) return r;
+    }
+    return null;
+  };
+  const r = tree ? walk(tree.roots, null) : null;
+  return r ? r.parent : null;
+}
+
 function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], nodes = null }) {
   const get = getter(states);
   const getNodes = getter(nodes);
@@ -168,7 +182,19 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], node
     const sel = ui.sel || null;
     const i = sel ? items.findIndex((it) => it.name === sel.board) : -1;
     const n = i >= 0 ? findNode(getNodes(sel.board), sel.k) : null;
-    if (n && n.rect) for (const c of onImages(i, n.rect)) selections.push({ ...c, label: String(n.name || ''), labelTop: c.top - LABEL_H });
+    if (n && n.rect) {
+      // the selected node's children, over the level (Figma): one click keeps
+      // the parent selected, a double click picks the child under the cursor
+      for (const ch of n.children || []) {
+        if (!ch.rect) continue;
+        for (const c of onImages(i, ch.rect)) hits.push({ board: sel.board, k: ch.k, ...c, tap: `sel:${sel.board}:${n.k}`, dbl: `child:${sel.board}:${ch.k}` });
+      }
+      // the chrome keeps its size on screen: canvas px / zoom scale
+      const scale = num(ui.scale) && ui.scale > 0 ? ui.scale : 1;
+      const labelH = LABEL_H / scale;
+      const chrome = { labelH, fontSize: 14 / scale, padX: 6 / scale, padY: 2 / scale, border: 2 / scale };
+      for (const c of onImages(i, n.rect)) selections.push({ ...c, label: String(n.name || ''), labelTop: c.top - labelH, ...chrome });
+    }
   }
 
   const zoom = { command: '', focus: { x: 0, y: 0, w: 1, h: 1 }, rev: num(ui.rev) ? ui.rev : 0 };
@@ -269,4 +295,4 @@ function clearSprites({ pluginDir, hash }) {
   fs.rmSync(path.join(pluginDir, 'cache', hash), { recursive: true, force: true });
 }
 
-module.exports = { build, wire, findNode, KEYS, cacheSprites, clearSprites, picturePath, STRIP, GAP, MARGIN };
+module.exports = { build, wire, findNode, parentOf, KEYS, cacheSprites, clearSprites, picturePath, STRIP, GAP, MARGIN };

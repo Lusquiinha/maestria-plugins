@@ -290,14 +290,15 @@ test('selection: blue rect with the name, in canvas px, over both copies in "bot
   const d = sel({ ui: { sel: { board: 'a', k: 3 }, level: { board: 'a', k: 1 } } });
   const A = img(d.boards[0]);
   const lt = A.top + 20 - 24; // the name sits in a 24 px strip above the rect
-  assert.deepStrictEqual(d.selection, { left: A.left + 10, top: A.top + 20, width: 200, height: 30, label: 'span', labelTop: lt });
+  const chrome = { labelH: 24, fontSize: 14, padX: 6, padY: 2, border: 2 };
+  assert.deepStrictEqual(d.selection, { left: A.left + 10, top: A.top + 20, width: 200, height: 30, label: 'span', labelTop: lt, ...chrome });
   assert.deepStrictEqual(d.selections, [
-    { left: A.left + 10, top: A.top + 20, width: 200, height: 30, label: 'span', labelTop: lt },
-    { left: A.left + 10 + 1280 + 24, top: A.top + 20, width: 200, height: 30, label: 'span', labelTop: lt },
+    { left: A.left + 10, top: A.top + 20, width: 200, height: 30, label: 'span', labelTop: lt, ...chrome },
+    { left: A.left + 10 + 1280 + 24, top: A.top + 20, width: 200, height: 30, label: 'span', labelTop: lt, ...chrome },
   ]);
   const dark = sel({ ui: { theme: 'dark', sel: { board: 'b', k: 1 } } });
   const B = img(dark.boards[1]);
-  assert.deepStrictEqual(dark.selections, [{ left: B.left + 5, top: B.top + 5, width: 100, height: 50, label: 'toast', labelTop: B.top + 5 - 24 }]);
+  assert.deepStrictEqual(dark.selections, [{ left: B.left + 5, top: B.top + 5, width: 100, height: 50, label: 'toast', labelTop: B.top + 5 - 24, ...chrome }]);
   const stale = sel({ ui: { sel: { board: 'a', k: 42 } } });
   assert.deepStrictEqual(stale.selections, []);
   noNull(d);
@@ -328,4 +329,36 @@ test('the canvas ui: KeyListener over the canvas, hits as Pressables, middle-dra
   assert.match(lib, /onTap: event "act" \{ a: args\.h\.tap \}/);
   assert.match(lib, /onDoubleTap: event "act" \{ a: args\.h\.dbl \}/);
   assert.match(lib, /onTap: event "act" \{ a: "clear" \}/);
+  for (const f of ['labelH', 'fontSize', 'padX', 'padY', 'border']) assert.match(lib, new RegExp(`args\\.s\\.${f}`));
+});
+
+test('the selected node\'s children are layered over the level: tap keeps the parent, double-click picks the child', () => {
+  const d = sel({ ui: { theme: 'light', sel: { board: 'a', k: 1 } } });
+  const A = img(d.boards[0]);
+  assert.deepStrictEqual(d.hits.map((h) => [h.board, h.k, h.tap, h.dbl]), [
+    ['a', 1, 'sel:a:1', 'in:a:1'],
+    ['a', 2, 'sel:a:2', 'in:a:2'],
+    ['b', 1, 'sel:b:1', 'in:b:1'],
+    // later in the Stack = on top
+    ['a', 3, 'sel:a:1', 'child:a:3'],
+    ['a', 4, 'sel:a:1', 'child:a:4'],
+  ]);
+  assert.deepStrictEqual([d.hits[3].left, d.hits[3].top, d.hits[3].width], [A.left + 10, A.top + 20, 200]);
+  // in "both" the children are on both copies
+  assert.strictEqual(sel({ ui: { sel: { board: 'a', k: 1 } } }).hits.filter((h) => h.dbl.startsWith('child:')).length, 4);
+  // a leaf adds nothing
+  assert.strictEqual(sel({ ui: { sel: { board: 'b', k: 1 } } }).hits.length, 6);
+});
+
+test('selection chrome keeps its on-screen size: zoom scale 2 halves it', () => {
+  const d = sel({ ui: { theme: 'light', sel: { board: 'a', k: 2 }, scale: 2 } });
+  const s = d.selections[0];
+  assert.deepStrictEqual([s.labelH, s.fontSize, s.padX, s.padY, s.border], [12, 7, 3, 1, 1]);
+  assert.strictEqual(s.labelTop, s.top - 12);
+});
+
+test('parentOf finds the parent (null at the top)', () => {
+  assert.strictEqual(view.parentOf(NODES.a, 3).k, 1);
+  assert.strictEqual(view.parentOf(NODES.a, 1), null);
+  assert.strictEqual(view.parentOf(NODES.a, 99), null);
 });

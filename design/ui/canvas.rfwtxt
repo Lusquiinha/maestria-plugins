@@ -133,7 +133,9 @@ widget Layers = Stack(
 );
 
 // Um nó clicável: 1 clique seleciona ("sel:<prancheta>:<k>"), 2 cliques
-// entram nele ("in:<prancheta>:<k>"). Transparente, só um tom ao passar.
+// também ("in:…"). Os filhos do selecionado vêm por cima: 1 clique mantém o
+// pai, 2 cliques escolhem o filho sob o cursor ("child:<prancheta>:<k>").
+// Transparente, só um tom ao passar.
 widget Hit = Positioned(
   start: args.h.left,
   top: args.h.top,
@@ -147,7 +149,8 @@ widget Hit = Positioned(
   ),
 );
 
-// O selecionado: borda azul e o nome numa faixa logo acima.
+// O selecionado: borda azul e o nome numa faixa logo acima, com tamanhos já
+// divididos pela escala do zoom (o mesmo tamanho na tela em qualquer zoom).
 widget Selected = Positioned(
   start: args.s.left,
   top: args.s.labelTop,
@@ -157,17 +160,17 @@ widget Selected = Positioned(
     crossAxisAlignment: "start",
     children: [
       SizedBox(
-        height: 24.0,
+        height: args.s.labelH,
         child: Container(
           color: data.theme.accent,
-          padding: [6.0, 2.0, 6.0, 2.0],
-          child: Text(text: args.s.label, maxLines: 1, style: { fontSize: 14.0, color: 0xFFFFFFFF }),
+          padding: [args.s.padX, args.s.padY, args.s.padX, args.s.padY],
+          child: Text(text: args.s.label, maxLines: 1, style: { fontSize: args.s.fontSize, color: 0xFFFFFFFF }),
         ),
       ),
       Container(
         width: args.s.width,
         height: args.s.height,
-        decoration: { type: "box", border: [{ color: data.theme.accent, width: 2.0 }] },
+        decoration: { type: "box", border: [{ color: data.theme.accent, width: args.s.border }] },
       ),
     ],
   ),

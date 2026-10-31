@@ -344,26 +344,28 @@ test('select on the canvas: tap, double-tap, ctrl+c copies the @n code, escape c
     await sleep(200);
     assert.ok(!h.msgs.some((m) => m.method === 'clipboard.write'));
 
-    // one tap selects a top node; a double-tap on one with children opens it
+    // one tap selects a top node; its children come layered on top of it
     const hash = open.params.viewId.slice('canvas:'.length);
     const tree = JSON.parse(fs.readFileSync(path.join(dataDir, hash, 'nodes', `${d0.hits[0].board}.json`), 'utf8'));
     const parent = tree.roots.find((n) => n.children && n.children.length);
     assert.ok(parent, 'a top node with children');
     const top = d0.hits.find((x) => x.k === parent.k);
+    const child = parent.children[0];
     let p = upd2((d) => d.selections.length > 0);
     act({ a: top.tap });
     const s1 = (await p).params.data;
     assert.strictEqual(s1.selection.label, parent.name);
-    p = upd2((d) => d.hits.some((x) => x.board === top.board && x.k === parent.children[0].k));
-    act({ a: top.dbl });
+    const layered = s1.hits.filter((x) => x.dbl.startsWith('child:'));
+    assert.deepStrictEqual([...new Set(layered.map((x) => x.k))].sort(), parent.children.map((n) => n.k).sort());
+    assert.ok(layered.every((x) => x.tap === `sel:${top.board}:${parent.k}`), 'one click on a child keeps the parent');
+    assert.ok(s1.hits.indexOf(layered[0]) > s1.hits.indexOf(top), 'children above the level');
+    // a double click on the child under the cursor picks it (Figma)
+    const hitOfChild = layered.find((x) => x.k === child.k);
+    p = upd2((d) => d.selection && d.selection.label === child.name);
+    act({ a: hitOfChild.dbl });
     const inside = (await p).params.data;
-    const ks = new Set(inside.hits.filter((x) => x.board === top.board).map((x) => x.k));
-    assert.deepStrictEqual([...ks].sort(), parent.children.map((n) => n.k).sort(), 'the hits there are its children');
-    // a tap on a child selects it (and ctrl+c copies the child)
-    p = upd2((d) => d.selection && d.selection.label === parent.children[0].name && d.hits.length === inside.hits.length);
-    act({ a: `sel:${top.board}:${parent.children[0].k}` });
-    await p;
-
+    const ks = new Set(inside.hits.filter((x) => x.board === top.board && x.dbl.startsWith('in:')).map((x) => x.k));
+    assert.deepStrictEqual([...ks].sort(), parent.children.map((n) => n.k).sort(), 'its siblings are the level now');
     // ctrl+c: clipboard.write with the @n code and a short banner
     const clip = next((m) => m.method === 'clipboard.write');
     const ban = next((m) => m.method === 'window.showBanner');
@@ -374,7 +376,7 @@ test('select on the canvas: tap, double-tap, ctrl+c copies the @n code, escape c
     const refs = JSON.parse(fs.readFileSync(path.join(dataDir, hash, 'refs.json'), 'utf8'));
     const entry = refs.codes[c.params.text.slice(2)];
     assert.strictEqual(entry.board, top.board);
-    assert.deepStrictEqual(entry.path, parent.children[0].path);
+    assert.deepStrictEqual(entry.path, child.path);
 
     // escape clears; a tap on the empty canvas clears too
     p = upd2((d) => d.selections.length === 0);
