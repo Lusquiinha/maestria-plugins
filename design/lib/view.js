@@ -46,7 +46,7 @@ function shift(items, pos, size, extra, crossPos, crossSize) {
   });
 }
 
-function build({ canvas, states, ui = {}, caps = {}, hash = '' }) {
+function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [] }) {
   const get = getter(states);
   const theme = THEMES.includes(ui.theme) ? ui.theme : 'both';
   const both = theme === 'both';
@@ -107,6 +107,24 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '' }) {
     focus: `focus:${it.name}`,
   }));
 
+  // the scanner: over each shown image (both copies in "both"), clipped to it
+  const scanRects = [];
+  for (const sc of scans || []) {
+    const i = items.findIndex((it) => it.name === sc.board);
+    if (i < 0) continue;
+    const it = items[i];
+    const r = sc.rect || { x: 0, y: 0, w: it.imgW, h: it.imgH };
+    const x0 = Math.max(0, r.x);
+    const y0 = Math.max(0, r.y);
+    const width = Math.min(it.imgW, r.x + r.w) - x0;
+    const height = Math.min(it.imgH, r.y + r.h) - y0;
+    if (!(width > 0 && height > 0)) continue;
+    const left = out[i].left + BORDER + x0;
+    const top = out[i].top + BORDER + STRIP + y0;
+    if (theme !== 'dark') scanRects.push({ left, top, width, height });
+    if (theme !== 'light') scanRects.push({ left: left + (both ? it.imgW + GAP : 0), top, width, height });
+  }
+
   const zoom = { command: '', focus: { x: 0, y: 0, w: 1, h: 1 }, rev: num(ui.rev) ? ui.rev : 0 };
   const cmd = ui.command;
   if (cmd && ['in', 'out', 'fit'].includes(cmd.kind)) zoom.command = cmd.kind;
@@ -139,6 +157,7 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '' }) {
     ],
     follow: !!ui.follow,
     boards: out,
+    scans: scanRects,
     list: out.map((b) => ({ name: b.name, title: b.title })),
     listMenu: out.map((b) => ({ action: b.focus, label: b.title })),
     hasBoards: out.length > 0,

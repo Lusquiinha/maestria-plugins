@@ -171,7 +171,8 @@ test('manifest: id, main, activation events, commands', () => {
   assert.strictEqual(m.name, 'Design');
   assert.strictEqual(m.maestria, 1);
   assert.deepStrictEqual(m.main, ['node', 'main.js']);
-  assert.deepStrictEqual(m.activationEvents, ['onCommand:abrir', 'onCommand:ajustar', 'onTool:design_open', 'onTool:design_board', 'onTool:design_render', 'onTool:design_focus', 'onTool:design_list']);
+  assert.deepStrictEqual(m.activationEvents, ['onCommand:abrir', 'onCommand:ajustar', 'onTool:design_open', 'onTool:design_board', 'onTool:design_render', 'onTool:design_focus', 'onTool:design_list', 'onTool:design_ref', 'onHook:PreToolUse']);
+  assert.deepStrictEqual(m.permissions, ['sessions.create', 'hooks']);
   assert.deepStrictEqual(m.contributes.commands, [{ id: 'abrir', title: 'design: abrir' }, { id: 'ajustar', title: 'design: ajustar' }]);
   assert.ok(fs.existsSync(path.join(__dirname, '..', m.icon)));
 });
@@ -191,4 +192,24 @@ test('wire: whole numbers become doubles for rfw (json has no 16.0); text and fl
 test('frameWidth fixes the Positioned width: box plus the 2 px border on each side', () => {
   const d = build();
   assert.deepStrictEqual(d.boards.map((b) => b.frameWidth), [2588, 828]);
+});
+
+test('scans: canvas px over each shown image, clipped to it; none by default', () => {
+  assert.deepStrictEqual(build().scans, []);
+  const rect = { x: 10, y: 20, w: 100, h: 40 };
+  const d = build({ extra: { scans: [{ board: 'a', rect: null }, { board: 'b', rect }, { board: 'gone', rect: null }] } });
+  const [a, b] = d.boards;
+  const top = (x) => x.top + 2 + 28; // border, then the name strip
+  assert.deepStrictEqual(d.scans, [
+    { left: a.left + 2, top: top(a), width: 1280, height: 200 },
+    { left: a.left + 2 + 1280 + 24, top: top(a), width: 1280, height: 200 },
+    { left: b.left + 2 + 10, top: top(b) + 20, width: 100, height: 40 },
+    { left: b.left + 2 + 400 + 24 + 10, top: top(b) + 20, width: 100, height: 40 },
+  ]);
+  const dark = build({ ui: { theme: 'dark' }, extra: { scans: [{ board: 'b', rect: { x: 350, y: 90, w: 100, h: 40 } }] } });
+  const db = dark.boards[1];
+  assert.deepStrictEqual(dark.scans, [{ left: db.left + 2 + 350, top: db.top + 30 + 90, width: 50, height: 10 }]);
+  const out = build({ extra: { scans: [{ board: 'b', rect: { x: 500, y: 0, w: 10, h: 10 } }] } });
+  assert.deepStrictEqual(out.scans, []);
+  noNull(d);
 });

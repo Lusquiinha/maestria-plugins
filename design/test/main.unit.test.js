@@ -74,3 +74,29 @@ test('reopening a canvas whose chrome gave up replaces its engine', async () => 
   assert.strictEqual(V.engine, second);
   await main.closeView(V.viewId);
 });
+
+test('a PreToolUse edit from the linked tab draws a scan until the board renders', async () => {
+  const dir = path.join(tmp, 'c');
+  const V = await main.openCanvas(dir, { tabId: 'tab-c' });
+  V.canvas = { title: 't', boards: { inbox: { x: 0, y: 0, w: 400 } }, order: ['inbox'], warnings: [] };
+  V.engine.uses = new Map([['inbox', new Set()]]);
+  const updates = [];
+  answer = async (m, p) => { if (m === 'view.update' && p.data) updates.push(p.data); return { open: true }; };
+  try {
+    const hook = (tabId, file) => main.onHook({ type: 'hook', name: 'PreToolUse', tabId, payload: { tool_name: 'Edit', tool_input: { file_path: file } } });
+    hook('tab-other', path.join(dir, 'boards', 'inbox.html')); // not linked to this canvas
+    hook('tab-c', path.join(tmp, 'elsewhere.html'));
+    await sleep(10);
+    assert.strictEqual(updates.length, 0);
+    hook('tab-c', path.join(dir, 'boards', 'inbox.html'));
+    await sleep(10);
+    assert.strictEqual(updates.length, 1);
+    assert.strictEqual(updates[0].scans.length, 2); // light and dark
+    V.engine.emit('board', 'inbox', { light: '/x.png', dark: '/y.png', width: 400, height: 100, rev: 1 });
+    await sleep(10);
+    assert.deepStrictEqual(updates[updates.length - 1].scans, []);
+  } finally {
+    answer = async () => ({ open: true });
+    await main.closeView(V.viewId);
+  }
+});

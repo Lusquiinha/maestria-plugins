@@ -18,9 +18,13 @@
     "onTool:design_render",
     "onTool:design_focus",
     "onTool:design_list",
-    "onTool:design_ref"
+    "onTool:design_ref",
+    "onHook:PreToolUse"
   ],
-  "permissions": [],
+  "permissions": [
+    "sessions.create",
+    "hooks"
+  ],
   "contributes": {
     "commands": [
       {

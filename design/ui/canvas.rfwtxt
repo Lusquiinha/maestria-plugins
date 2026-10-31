@@ -8,6 +8,9 @@
 // "tema:<light|dark|both>"; o `ZoomView` conta a escala em "zoom" (extra
 // `scale`) e o arrasto do usuário em "move" (extra `scale`, `x`, `y`).
 //
+// `data.scans` são os retângulos do scanner (px do canvas, já nas duas cópias
+// no modo "ambos").
+//
 // `data.picture` diz se a Maestria tem o `Picture` (que lê da pasta de dados
 // do plugin); sem ele, as imagens vêm por `Sprite` (cópias na pasta do plugin).
 
@@ -125,6 +128,9 @@ widget Area = switch data.hasBoards {
           children: [
             ...for b in data.boards:
               Board(b: b),
+            // after the boards, so the boards keep their Sprite slots
+            ...for s in data.scans:
+              Scan(s: s),
           ],
         ),
       ),
@@ -177,6 +183,16 @@ widget Board = Positioned(
       ),
     ),
   ),
+);
+
+// O scanner: uma faixa azul descendo sobre o que o claude está editando
+// (sweep.png: 12 quadros lado a lado, esticados no retângulo). Só desenha.
+widget Scan = Positioned(
+  start: args.s.left,
+  top: args.s.top,
+  width: args.s.width,
+  height: args.s.height,
+  child: Sprite(sheet: "cache/sweep.png", columns: 12, rows: 1, frames: 12, fps: 24.0, loop: true, width: args.s.width, height: args.s.height),
 );
 
 // Uma imagem da prancheta; antes da primeira renderização, um quadro vazio.

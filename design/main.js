@@ -19,6 +19,8 @@ const engineMod = require('./lib/engine');
 const view = require('./lib/view');
 const follow = require('./lib/follow');
 const tools = require('./lib/tools');
+const scanner = require('./lib/scanner');
+const sweep = require('./lib/sweep');
 
 const PLUGIN_ID = 'maestria.design';
 const UI_FILE = path.join(__dirname, 'ui', 'canvas.rfwtxt');
@@ -45,6 +47,9 @@ const state = {
   probe: null, // the timer of the closed-tab probe
   exiting: false,
 };
+
+// the blue band over what Claude is editing; a timed-out scan redraws its canvas
+const scans = scanner.create({ onChange: (dir) => { const V = viewOf(dir); if (V) render(V); } });
 
 const errText = (e) => String((e && e.message) || e);
 const hashOf = (dir) => crypto.createHash('sha1').update(path.resolve(dir)).digest('hex').slice(0, 12);
@@ -84,7 +89,7 @@ function lastFor({ tabId, cwd }) {
 // --- a janela -----------------------------------------------------------------------
 
 function data(V) {
-  const d = view.build({ canvas: V.canvas, states: V.states, ui: V.ui, caps: state.caps, hash: V.hash });
+  const d = view.build({ canvas: V.canvas, states: V.states, ui: V.ui, caps: state.caps, hash: V.hash, scans: scans.active(V.dir) });
   return view.wire(d);
 }
 
@@ -128,6 +133,7 @@ function highlight(V, name) {
 }
 
 function onBoard(V, name, s) {
+  scans.end(name, V.dir); // the new image is here: the scan over it stops
   if (s) V.states.set(name, s);
   else V.states.delete(name);
   // the first render of the boards that were there at open is not news
@@ -236,6 +242,7 @@ async function closeView(viewId) {
   V.closed = true;
   clearTimeout(V.highlightTimer);
   if (state.current === viewId) state.current = null;
+  scans.clear(V.dir);
   if (!state.caps.picture) { try { view.clearSprites({ pluginDir: state.pluginDir, hash: V.hash }); } catch { /* best effort */ } }
   if (V.engine) await closeEngine(V.engine);
 }
@@ -343,6 +350,7 @@ mx.onRequest('initialize', (params) => {
   if (params.dataDir) state.dataDir = params.dataDir;
   if (params.pluginDir) state.pluginDir = params.pluginDir;
   loadLast();
+  try { sweep.ensure(state.pluginDir); } catch (e) { mx.log('sweep.png:', errText(e)); }
   return {};
 });
 
@@ -377,8 +385,26 @@ mx.onNotification('view.action', async ({ viewId, action, values }) => {
   }
 });
 
+// PreToolUse from a tab linked to an open canvas (last.json byTab): scan what it edits.
+function onHook(e) {
+  if (e.name !== 'PreToolUse') return;
+  const canvases = [];
+  for (const V of state.views.values()) {
+    if (V.closed || !V.engine || !V.canvas) continue;
+    canvases.push({ dir: V.dir, boards: V.canvas.order || [], uses: V.engine.uses || new Map() });
+  }
+  if (!canvases.length) return;
+  const got = scans.onHook({ tabId: e.tabId, payload: e.payload }, { canvases, linkedDir: (tab) => state.last.byTab[tab] || null });
+  const dirs = new Set(got.map((t) => t.dir));
+  for (const dir of dirs) { const V = viewOf(dir); if (V) render(V); }
+}
+
 mx.onNotification('event', (e) => {
-  if (e && e.type === 'view.closed') closeView(e.viewId);
+  if (!e) return;
+  if (e.type === 'view.closed') closeView(e.viewId);
+  else if (e.type === 'hook') {
+    try { onHook(e); } catch (err) { mx.log('hook:', errText(err)); }
+  }
 });
 
 // --- sem órfãos: o Chrome e o Tailwind morrem com o plugin ------------------------------
@@ -433,4 +459,4 @@ for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
 
 mx.start();
 
-module.exports = { state, openCanvas, focusBoard, viewOf, hashOf, render, closeView, command };
+module.exports = { state, openCanvas, focusBoard, viewOf, hashOf, render, closeView, command, onHook, scans };
