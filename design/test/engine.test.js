@@ -85,7 +85,8 @@ test('the light render writes the node map with the Sidebar instance', { skip },
   assert.ok(side, JSON.stringify(all.slice(0, 5)));
   assert.deepStrictEqual(side.rect, { x: 0, y: 0, w: 200, h: 720 });
   assert.deepStrictEqual(side.call, { file: 'boards/conversas.html', path: [0, 0] });
-  assert.strictEqual(side.file, 'components/Sidebar.html');
+  // the call is written in the board; the definition is in components/
+  assert.deepStrictEqual([side.file, side.path, side.componentFile], ['boards/conversas.html', [0, 0], 'components/Sidebar.html']);
   assert.ok(all.some((n) => n.file === 'components/Sidebar.html' && n.name === 'nav'));
   assert.ok(all.length > 30 && all.length < 200, `${all.length} nodes`);
   const expanded = fs.readFileSync(path.join(dataDir, 'expanded', 'conversas.html'), 'utf8');

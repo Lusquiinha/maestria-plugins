@@ -15,25 +15,57 @@ const box = (k, p, x, y, w, h, text = false) => ({ k, p, x, y, w, h, text });
 test('tree nests by parent, keeps sources and skips same-rect wrappers', () => {
   const sources = new Map([
     el(1, [0]), el(2, [0, 0]), el(3, [0, 0, 0], 'p'), el(4, [0, 0, 1], 'span'),
-    [5, { file: 'components/Card.html', path: [0], kind: 'component', name: 'Card', call: { file: 'boards/b.html', path: [0, 1] } }],
   ]);
   const boxes = [
     box(1, null, 0, 0, 400, 300),
     box(2, 1, 0, 0, 400, 300), // anonymous wrapper, same rect as its parent: skipped
     box(3, 2, 10, 10, 100, 20, true),
     box(4, 2, 0, 0, 400, 300, true), // same rect but holds text: kept
-    box(5, 1, 0, 0, 400, 300), // component instance with the parent's rect: kept
   ];
   const { roots } = nodes.tree(boxes, sources);
   assert.strictEqual(roots.length, 1);
   const r = roots[0];
   assert.deepStrictEqual({ ...r, children: undefined }, {
-    k: 1, rect: { x: 0, y: 0, w: 400, h: 300 }, kind: 'element', name: 'div', file: 'boards/b.html', path: [0], call: null, component: null, children: undefined,
+    k: 1, rect: { x: 0, y: 0, w: 400, h: 300 }, kind: 'element', name: 'div', file: 'boards/b.html', path: [0], call: null, componentFile: null, children: undefined,
   });
-  assert.deepStrictEqual(r.children.map((c) => c.k), [3, 4, 5]);
-  assert.deepStrictEqual(r.children[2].call, { file: 'boards/b.html', path: [0, 1] });
-  assert.strictEqual(r.children[2].kind, 'component');
-  assert.strictEqual(r.children[2].name, 'Card');
+  assert.deepStrictEqual(r.children.map((c) => c.k), [3, 4]);
+});
+
+test('a component call is boxed around its top-level elements; nested calls nest and are both kept', () => {
+  const call = (k, name, file, path, inst) => [k, { file, path, tag: 'x-' + name.toLowerCase(), kind: 'component', name,
+    componentFile: `components/${name}.html`, call: { file, path }, ...(inst != null ? { inst } : {}) }];
+  // board: <main><x-card/></main>; Card = '<div>a</div><x-badge/>'; Badge = '<b>B</b>'
+  // and <x-outer/> with Outer = '<x-inner/>', Inner = '<i>k</i>' (same rect for both calls)
+  const sources = new Map([
+    el(1, [0], 'main'),
+    [2, { file: 'components/Card.html', path: [0], tag: 'div', kind: 'element', name: 'div', inst: 10 }],
+    [3, { file: 'components/Badge.html', path: [0], tag: 'b', kind: 'element', name: 'b', inst: 11 }],
+    [4, { file: 'components/Inner.html', path: [0], tag: 'i', kind: 'element', name: 'i', inst: 13 }],
+    call(10, 'Card', 'boards/b.html', [0, 0]),
+    call(11, 'Badge', 'components/Card.html', [1], 10),
+    call(12, 'Outer', 'boards/b.html', [0, 1]),
+    call(13, 'Inner', 'components/Outer.html', [0], 12),
+  ]);
+  const boxes = [
+    box(1, null, 0, 0, 500, 500),
+    box(2, 1, 10, 10, 100, 20, true),
+    box(3, 1, 10, 30, 50, 40, true),
+    box(4, 1, 200, 200, 30, 30, true),
+  ];
+  const { roots } = nodes.tree(boxes, sources);
+  const main = roots[0];
+  assert.deepStrictEqual(main.children.map((c) => [c.k, c.name]), [[10, 'Card'], [12, 'Outer']]);
+  const card = main.children[0];
+  assert.deepStrictEqual(card.rect, { x: 10, y: 10, w: 100, h: 60 });
+  assert.deepStrictEqual([card.kind, card.file, card.path, card.componentFile], ['component', 'boards/b.html', [0, 0], 'components/Card.html']);
+  assert.deepStrictEqual(card.children.map((c) => c.k), [2, 11]);
+  assert.deepStrictEqual(card.children[1].children.map((c) => c.k), [3]);
+  assert.deepStrictEqual(card.children[1].rect, { x: 10, y: 30, w: 50, h: 40 });
+  const outer = main.children[1];
+  assert.deepStrictEqual(outer.rect, { x: 200, y: 200, w: 30, h: 30 });
+  assert.strictEqual(outer.children[0].name, 'Inner');
+  assert.deepStrictEqual(outer.children[0].rect, outer.rect);
+  assert.deepStrictEqual(outer.children[0].children.map((c) => c.k), [4]);
 });
 
 const count = (ns) => ns.reduce((n, x) => n + 1 + count(x.children), 0);

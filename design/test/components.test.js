@@ -127,7 +127,9 @@ test('annotate puts a unique data-dn on every element and maps board elements to
   assert.strictEqual(r.html.replace(/ data-dn="\d+"/g, ''), components.expand('<div class="a"><p>oi <b>x</b></p><img src="i.png"><br/><span>z</span></div>', comps({})).html);
 });
 
-test('annotate maps a component root to its call site and slot children to the caller', () => {
+const calls = (r) => [...r.sources].filter(([, x]) => x.kind === 'component');
+
+test('annotate gives every component call its own record, written where the call is', () => {
   const c = comps({
     Sidebar: '<nav class="w-48"><slot></slot><x-nav-item label="Fixo"></x-nav-item></nav>',
     NavItem: '<a class="p-2"><span>{{label}}</span></a>',
@@ -136,30 +138,52 @@ test('annotate maps a component root to its call site and slot children to the c
     { annotate: true, file: 'boards/conversas.html' });
   assert.deepStrictEqual(r.errors, []);
   assert.ok(!/data-dn-/.test(r.html), 'no temporary markers left');
-  const list = dnOf(r.html).map(([tag, k]) => ({ tag, ...r.sources.get(k) }));
+  const list = dnOf(r.html).map(([tag, k]) => ({ k, tag, ...r.sources.get(k) }));
   assert.strictEqual(list.length, openTags(r.html).length);
+  const ks = list.map((x) => x.k);
+  const cs = calls(r);
+  assert.strictEqual(cs.length, 3);
+  for (const [k] of cs) assert.ok(k > Math.max(...ks), 'call k come after the element k');
+  const side = cs.find(([, x]) => x.name === 'Sidebar');
+  assert.deepStrictEqual(side[1], { file: 'boards/conversas.html', path: [0, 1], tag: 'x-sidebar', kind: 'component', name: 'Sidebar',
+    componentFile: 'components/Sidebar.html', call: { file: 'boards/conversas.html', path: [0, 1] } });
+  const items = cs.filter(([, x]) => x.name === 'NavItem').map(([, x]) => [x.file, x.path, x.tag, x.inst]);
+  assert.deepStrictEqual(items.sort(), [
+    ['boards/conversas.html', [0, 1, 0], 'x-nav-item', undefined], // in the slot: written in the board
+    ['components/Sidebar.html', [0, 1], 'x-nav-item', undefined], // inside Sidebar, not at its top level
+  ].sort());
+  // the template's top-level elements point at their own call
   const nav = list.find((x) => x.tag === 'nav');
-  assert.deepStrictEqual(nav, { tag: 'nav', file: 'components/Sidebar.html', path: [0], kind: 'component', name: 'Sidebar',
-    component: { name: 'Sidebar', file: 'components/Sidebar.html' }, call: { file: 'boards/conversas.html', path: [0, 1] } });
-  const [a1, a2] = list.filter((x) => x.tag === 'a');
-  assert.deepStrictEqual(a1.call, { file: 'boards/conversas.html', path: [0, 1, 0] }); // instance in the board (slot)
-  assert.deepStrictEqual(a2.call, { file: 'components/Sidebar.html', path: [0, 1] }); // instance inside Sidebar
-  assert.strictEqual(a1.kind, 'component');
-  assert.strictEqual(a1.name, 'NavItem');
-  const spans = list.filter((x) => x.tag === 'span');
-  assert.deepStrictEqual(spans.map((s) => [s.file, s.path, s.kind]), [
-    ['components/NavItem.html', [0, 0], 'element'], ['components/NavItem.html', [0, 0], 'element']]);
+  assert.deepStrictEqual(nav, { k: nav.k, tag: 'nav', file: 'components/Sidebar.html', path: [0], kind: 'element', name: 'nav', inst: side[0] });
+  const as = list.filter((x) => x.tag === 'a');
+  assert.deepStrictEqual(as.map((x) => r.sources.get(x.inst).file).sort(), ['boards/conversas.html', 'components/Sidebar.html']);
   const p = list.find((x) => x.tag === 'p');
-  assert.deepStrictEqual([p.file, p.path], ['boards/conversas.html', [0, 1, 1]]);
+  assert.deepStrictEqual([p.file, p.path, p.inst], ['boards/conversas.html', [0, 1, 1], undefined]);
 });
 
-test('annotate: a component whose root is another component keeps the outer instance', () => {
+test('annotate: a top-level call inside a template is its own instance, never relabelled', () => {
+  const c = comps({ Card: '<div>a</div><x-badge></x-badge>', Badge: '<b>B</b>' });
+  const r = components.expand('<x-card></x-card>', c, { annotate: true, file: 'boards/b.html' });
+  const cs = new Map(calls(r).map(([k, x]) => [x.name, { k, ...x }]));
+  const card = cs.get('Card');
+  const badge = cs.get('Badge');
+  assert.deepStrictEqual([card.file, card.path, card.tag, card.componentFile, card.inst], ['boards/b.html', [0], 'x-card', 'components/Card.html', undefined]);
+  assert.deepStrictEqual([badge.file, badge.path, badge.tag, badge.componentFile, badge.inst], ['components/Card.html', [1], 'x-badge', 'components/Badge.html', card.k]);
+  const els = new Map(dnOf(r.html).map(([t, k]) => [t, r.sources.get(k)]));
+  assert.deepStrictEqual(els.get('div'), { file: 'components/Card.html', path: [0], tag: 'div', kind: 'element', name: 'div', inst: card.k });
+  assert.deepStrictEqual(els.get('b'), { file: 'components/Badge.html', path: [0], tag: 'b', kind: 'element', name: 'b', inst: badge.k });
+});
+
+test('annotate: a component whose root is another component gives two consistent instances', () => {
   const c = comps({ Outer: '<x-inner></x-inner>', Inner: '<div><i>k</i></div>' });
   const r = components.expand('<x-outer></x-outer>', c, { annotate: true, file: 'boards/b.html' });
+  const cs = new Map(calls(r).map(([k, x]) => [x.name, { k, ...x }]));
+  const outer = cs.get('Outer');
+  const inner = cs.get('Inner');
+  assert.deepStrictEqual([outer.file, outer.path, outer.tag, outer.componentFile, outer.inst], ['boards/b.html', [0], 'x-outer', 'components/Outer.html', undefined]);
+  assert.deepStrictEqual([inner.file, inner.path, inner.tag, inner.componentFile, inner.inst], ['components/Outer.html', [0], 'x-inner', 'components/Inner.html', outer.k]);
   const [[, k]] = dnOf(r.html);
-  // file/path/tag: where the element is written; component/call: the outer instance
-  assert.deepStrictEqual(r.sources.get(k), { file: 'components/Inner.html', path: [0], tag: 'div', kind: 'component', name: 'Outer',
-    component: { name: 'Outer', file: 'components/Outer.html' }, call: { file: 'boards/b.html', path: [0] } });
+  assert.deepStrictEqual(r.sources.get(k), { file: 'components/Inner.html', path: [0], tag: 'div', kind: 'element', name: 'div', inst: inner.k });
 });
 
 test('annotate skips comments and script text, numbers raw-param elements without a source, and keeps tailwind classes', () => {
@@ -217,7 +241,8 @@ test('round trip: every source of the bench board (sidebar as a component) resol
   for (const [name, b] of [['plain', board], ['sidebar', files['boards/conversas.html']]]) {
     const r = components.expand(b, comps({ Sidebar: aside }), { annotate: true, file: 'boards/conversas.html' });
     assert.deepStrictEqual(r.errors, []);
-    assert.strictEqual(r.sources.size, openTags(r.html).length, name);
+    assert.strictEqual([...r.sources.values()].filter((x) => x.kind === 'element').length, openTags(r.html).length, name);
+    assert.strictEqual(calls(r).length, name === 'plain' ? 0 : 1);
     roundTrip(r.sources, (f) => (name === 'plain' ? board : files[f]));
   }
 });
@@ -234,8 +259,15 @@ test('round trip: components fixture (slots, nesting, component root that is a c
     .map(([f, t]) => [f.slice(11, -5), t])));
   const r = components.expand(files['boards/b.html'], c, { annotate: true, file: 'boards/b.html' });
   assert.deepStrictEqual(r.errors, []);
-  assert.strictEqual(r.sources.size, openTags(r.html.replace(/<!--[\s\S]*?-->/g, '')).length);
+  const els = [...r.sources.values()].filter((x) => x.kind === 'element');
+  assert.strictEqual(els.length, openTags(r.html.replace(/<!--[\s\S]*?-->/g, '')).length);
   roundTrip(r.sources, (f) => files[f]);
-  const cardRoots = [...r.sources.values()].filter((x) => x.component && x.component.name === 'Card');
-  assert.ok(cardRoots.length >= 2 && cardRoots.every((x) => x.file === 'components/Box.html'), JSON.stringify(cardRoots));
+  const cards = calls(r).filter(([, x]) => x.name === 'Card');
+  assert.deepStrictEqual(cards.map(([, x]) => x.file).sort(), ['boards/b.html', 'components/Sidebar.html']);
+  const boxes = calls(r).filter(([, x]) => x.name === 'Box');
+  assert.strictEqual(boxes.length, 2);
+  for (const [, x] of boxes) {
+    assert.deepStrictEqual([x.file, x.path], ['components/Card.html', [0]]);
+    assert.strictEqual(r.sources.get(x.inst).name, 'Card'); // a Card's root call: the Card is its parent
+  }
 });
