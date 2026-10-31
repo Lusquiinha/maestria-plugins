@@ -48,6 +48,12 @@ test.before(async () => {
   const d = JSON.parse(fs.readFileSync(path.join(canvasDir, 'design.json'), 'utf8'));
   d.repo = SAC;
   fs.writeFileSync(path.join(canvasDir, 'design.json'), JSON.stringify(d));
+  // the sidebar becomes a component (same pixels), so the node map has an instance
+  const board = fs.readFileSync(boardFile('conversas'), 'utf8');
+  const aside = /<aside[\s\S]*<\/aside>/.exec(board)[0];
+  fs.mkdirSync(path.join(canvasDir, 'components'), { recursive: true });
+  fs.writeFileSync(path.join(canvasDir, 'components', 'Sidebar.html'), aside);
+  fs.writeFileSync(boardFile('conversas'), board.replace(aside, '<x-sidebar></x-sidebar>'));
   eng = await engineMod.open(canvasDir, { dataDir, log: (m) => logs.push(m) });
   eng.on('board', (name, state) => events.push({ name, state, at: Date.now() }));
 });
@@ -64,6 +70,26 @@ test('renders every board once on open', { skip }, async () => {
   assert.strictEqual(e.state.light, path.join(dataDir, 'png', 'conversas.light.png'));
   assert.strictEqual(e.state.width, 1280);
   assert.ok(e.state.height > 100);
+});
+
+const walk = (ns, f) => { for (const n of ns) { f(n); walk(n.children, f); } };
+
+test('the light render writes the node map with the Sidebar instance', { skip }, async () => {
+  const e = await waitBoard((x) => x.name === 'conversas' && x.state && x.state.light);
+  assert.strictEqual(e.state.nodes, path.join(dataDir, 'nodes', 'conversas.json'));
+  const map = JSON.parse(fs.readFileSync(e.state.nodes, 'utf8'));
+  assert.strictEqual(map.rev, e.state.rev);
+  const all = [];
+  walk(map.roots, (n) => all.push(n));
+  const side = all.find((n) => n.kind === 'component' && n.name === 'Sidebar');
+  assert.ok(side, JSON.stringify(all.slice(0, 5)));
+  assert.deepStrictEqual(side.rect, { x: 0, y: 0, w: 200, h: 720 });
+  assert.deepStrictEqual(side.call, { file: 'boards/conversas.html', path: [0, 0] });
+  assert.strictEqual(side.file, 'components/Sidebar.html');
+  assert.ok(all.some((n) => n.file === 'components/Sidebar.html' && n.name === 'nav'));
+  assert.ok(all.length > 30 && all.length < 200, `${all.length} nodes`);
+  const expanded = fs.readFileSync(path.join(dataDir, 'expanded', 'conversas.html'), 'utf8');
+  assert.match(expanded, /<aside data-dn="\d+" class="dark brand-surface/);
 });
 
 test('saving a board emits both PNGs under 1 s and logs the render ms', { skip }, async () => {
@@ -142,6 +168,7 @@ test('deleting a board emits null and nothing after', { skip }, async () => {
   await sleep(600);
   assert.strictEqual(events.filter((x) => x.name === 'plain').length, 1);
   assert.ok(!fs.existsSync(png));
+  assert.ok(!fs.existsSync(path.join(dataDir, 'nodes', 'plain.json')));
 });
 
 test('deleting a board while chrome renders it leaves no png and no later event', { skip }, async () => {
@@ -200,6 +227,24 @@ test('a class that produces no css does not stall the save', { skip }, async () 
   const e = await waitBoard((x) => x.name === 'conversas');
   assert.ok(e.state.light && !e.state.error);
   assert.ok(e.state.ms < 600, `ms ${e.state.ms}`);
+});
+
+test('a 5000-element board: node map capped, save to image under 1 s', { skip }, async () => {
+  // compact (about 600 px tall): a tall page is slow to screenshot whatever the node map does
+  const cells = (tag) => Array.from({ length: 2500 }, (_, i) => `<div class="border text-[8px] leading-[10px]"><${tag}>c${i}</${tag}></div>`).join('');
+  addBoard('big', `<div class="grid grid-cols-[repeat(50,1fr)]">${cells('span')}</div>`, 1200);
+  await waitBoard((x) => x.name === 'big' && x.state && x.state.light, 15000);
+  events.length = 0;
+  fs.writeFileSync(boardFile('big'), `<div class="grid grid-cols-[repeat(50,1fr)]">${cells('b')}</div>`);
+  const e = await waitBoard((x) => x.name === 'big', 15000);
+  assert.ok(e.state.light && !e.state.error, JSON.stringify(e.state));
+  assert.ok(e.state.ms < 1000, `ms ${e.state.ms}`);
+  const map = JSON.parse(fs.readFileSync(e.state.nodes, 'utf8'));
+  let n = 0;
+  walk(map.roots, () => n++);
+  assert.strictEqual(n, 2000);
+  fs.rmSync(boardFile('big'));
+  await waitBoard((x) => x.name === 'big' && x.state === null);
 });
 
 test('chrome is relaunched after a death that follows a good render (consecutive deaths: engine.unit)', { skip }, async () => {

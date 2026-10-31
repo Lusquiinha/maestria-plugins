@@ -52,7 +52,7 @@ async function contentHeight(chrome, sid) {
   return Math.ceil(metrics.cssContentSize.height);
 }
 
-async function renderOnce(chrome, { htmlPath, width, height, dark, out, small }) {
+async function renderOnce(chrome, { htmlPath, width, height, dark, out, small, collect }) {
   const t0 = Date.now();
   const sid = await getSession(chrome);
   await chrome.send('Emulation.setDeviceMetricsOverride',
@@ -110,7 +110,14 @@ async function renderOnce(chrome, { htmlPath, width, height, dark, out, small })
     }, sid);
     save(small.out, mini.data);
   }
-  return { width, height: h, cut, ms: Date.now() - t0 };
+  let collected;
+  if (collect) {
+    // `collect`: an expression evaluated in the rendered page; its value comes
+    // back as `collected` (null if it threw: the images are still good)
+    const r = await chrome.send('Runtime.evaluate', { expression: collect, returnByValue: true }, sid);
+    collected = r.exceptionDetails ? null : r.result && r.result.value;
+  }
+  return { width, height: h, cut, ms: Date.now() - t0, collected };
 }
 
 async function renderPage(chrome, opts) {

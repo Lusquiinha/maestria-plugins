@@ -7,6 +7,7 @@ const path = require('node:path');
 const canvasMod = require('./canvas');
 const chromeMod = require('./chrome');
 const components = require('./components');
+const nodes = require('./nodes');
 const page = require('./page');
 const renderMod = require('./render');
 
@@ -52,6 +53,7 @@ class Engine extends EventEmitter {
     this.uses = new Map(); // name -> Set of components used
     this.tokens = new Map(); // name -> class tokens in the last expanded page
     this.expandedText = new Map();
+    this.sources = new Map(); // name -> node sources of the expanded page (components.expand annotate)
     this.started = new Map(); // name -> ms of the first pending change
     this.timers = new Map();
     this.watchers = [];
@@ -68,6 +70,7 @@ class Engine extends EventEmitter {
   renderFile(name) { return path.join(this.dataDir, 'render', `${name}.html`); }
   pngFile(name, theme) { return path.join(this.dataDir, 'png', `${name}.${theme}.png`); }
   claudeFile(name, theme) { return path.join(this.dataDir, 'png', `${name}.${theme}.claude.png`); }
+  nodesFile(name) { return path.join(this.dataDir, 'nodes', `${name}.json`); }
 
   boardNames() {
     let files = [];
@@ -177,8 +180,9 @@ class Engine extends EventEmitter {
     this.uses.delete(name);
     this.tokens.delete(name);
     this.expandedText.delete(name);
+    this.sources.delete(name);
     this.cssSeen.delete(name);
-    for (const f of [this.expandedFile(name), this.renderFile(name), this.pngFile(name, 'light'), this.pngFile(name, 'dark'),
+    for (const f of [this.nodesFile(name), this.expandedFile(name), this.renderFile(name), this.pngFile(name, 'light'), this.pngFile(name, 'dark'),
       this.claudeFile(name, 'light'), this.claudeFile(name, 'dark')]) rm(f);
     if (had) this.emit('board', name, null);
   }
@@ -264,11 +268,12 @@ class Engine extends EventEmitter {
     try { src = read(this.boardFile(name)); } catch { return { gone: true }; }
     const markup = page.checkMarkup(src);
     if (markup) return { error: `marcação inválida: ${markup}` };
-    const exp = components.expand(src, this.comps);
+    const exp = components.expand(src, this.comps, { annotate: true, file: `boards/${name}.html` });
     this.uses.set(name, exp.uses);
     if (exp.errors.length) return { error: exp.errors.join('; ') };
     const tail = page.checkMarkup(exp.html);
     if (tail) return { error: `marcação inválida: ${tail}` };
+    this.sources.set(name, exp.sources);
     const body = page.buildPage({ outCss: this.outCss, brandCss: this.brandCss, head: this.design.head, body: exp.html });
     const same = this.expandedText.get(name) === body && fs.existsSync(this.expandedFile(name));
     let build = false;
@@ -340,6 +345,8 @@ class Engine extends EventEmitter {
 
   // Renders both themes into per-rev temp files; _finish promotes them to the
   // stable paths only if the board was not deleted or re-saved meanwhile.
+  // The light render also measures the element boxes (the layout is the same
+  // in dark) into the node map.
   async _render(name, rev, forClaude = false) {
     const b = this.canvas.boards[name];
     const t0 = Date.now();
@@ -347,36 +354,42 @@ class Engine extends EventEmitter {
     const tmp = (theme) => path.join(this.dataDir, 'png', `${name}.${theme}.${rev}.tmp.png`);
     const temps = [tmp('light'), tmp('dark')];
     if (forClaude) temps.push(tmp('light.claude'), tmp('dark.claude'));
+    const nodesTmp = path.join(this.dataDir, 'nodes', `${name}.${rev}.tmp.json`);
     let lastErr = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const chrome = await this._chrome();
-        if (stale()) return { stale: true, temps };
+        if (stale()) return { stale: true, temps, nodesTmp };
         const src = this.expandedText.get(name);
+        const sources = this.sources.get(name);
         const version = fs.statSync(this.outCss).mtimeMs;
         const copy = this.renderFile(name);
         writeAtomic(copy, src.replace(`href="file://${this.outCss}"`, `href="file://${this.outCss}?v=${version}"`));
         fs.mkdirSync(path.join(this.dataDir, 'png'), { recursive: true });
         const base = { htmlPath: copy, width: b.w, height: b.h };
         const small = (i) => (forClaude ? { small: { out: temps[i], maxSide: CLAUDE_MAX_SIDE } } : {});
-        const light = await renderMod.renderPage(chrome, { ...base, dark: null, out: temps[0], ...small(2) });
-        if (stale()) return { stale: true, temps };
+        const light = await renderMod.renderPage(chrome, { ...base, dark: null, out: temps[0], ...small(2), collect: nodes.collectScript });
+        if (stale()) return { stale: true, temps, nodesTmp };
+        const map = Array.isArray(light.collected) && sources
+          ? { rev, width: light.width, height: light.height, ...nodes.tree(light.collected, sources) } : null;
+        if (map) writeAtomic(nodesTmp, JSON.stringify(map));
+        else this.log(`board ${name}: sem mapa de nós`);
         const dark = await renderMod.renderPage(chrome, { ...base, dark: this.design.darkMode, out: temps[1], ...small(3) });
         this.deaths = 0; // a good render: only consecutive deaths are final
         this.log(`render ${name}: ${Date.now() - t0} ms (light ${light.ms} + dark ${dark.ms})`);
-        return { temps, width: light.width, height: light.height, cut: light.cut };
+        return { temps, nodesTmp: map ? nodesTmp : null, width: light.width, height: light.height, cut: light.cut };
       } catch (e) {
         lastErr = e;
-        for (const t of temps) rm(t);
+        for (const t of [...temps, nodesTmp]) rm(t);
         if (this.chromeError || !(this.chrome && this.chrome.exited) || this.deaths >= 2) break;
       }
     }
-    return { error: this.chromeError || lastErr.message, temps };
+    return { error: this.chromeError || lastErr.message, temps, nodesTmp };
   }
 
   _finish(name, rev, t0, out, results) {
     const stale = this.closed || this.revs.get(name) !== rev;
-    if (stale || out.error) for (const t of out.temps || []) rm(t);
+    if (stale || out.error) for (const t of [...(out.temps || []), out.nodesTmp]) if (t) rm(t);
     if (stale || out.stale) return; // deleted or re-saved: drop
     if (out.gone) { this._deleted(name); results.set(name, null); return; }
     const prev = this.states.get(name);
@@ -391,6 +404,10 @@ class Engine extends EventEmitter {
       fs.renameSync(out.temps[0], light);
       fs.renameSync(out.temps[1], dark);
       state = { light, dark, width: out.width, height: out.height, cut: out.cut, ms: Date.now() - t0, rev };
+      if (out.nodesTmp) {
+        fs.renameSync(out.nodesTmp, this.nodesFile(name));
+        state.nodes = this.nodesFile(name);
+      } else rm(this.nodesFile(name)); // never leave a map of an older layout
       if (out.temps.length === 4) {
         const claude = { light: this.claudeFile(name, 'light'), dark: this.claudeFile(name, 'dark') };
         fs.renameSync(out.temps[2], claude.light);

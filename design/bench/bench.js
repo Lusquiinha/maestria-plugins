@@ -6,6 +6,8 @@ const path = require('node:path');
 const chromeMod = require('../lib/chrome');
 const { renderPage } = require('../lib/render');
 const { buildPage, startTailwind } = require('../lib/page');
+const components = require('../lib/components');
+const nodes = require('../lib/nodes');
 
 const RUNS = Number(process.argv[3]) || 10;
 const GATE = { adjustP90: 1000, cold: 3000 };
@@ -38,11 +40,15 @@ class Session {
     this.tw = null;
   }
 
-  // Board fragment -> plain HTML the Tailwind CLI scans.
+  // Board fragment -> plain HTML the Tailwind CLI scans (components expanded,
+  // annotated with node ids as the engine does).
   expand() {
+    const exp = components.expand(read(this.boardSrc), components.load(this.canvas), { annotate: true, file: `boards/${this.board}.html` });
+    this.body = exp.html;
+    this.sources = exp.sources;
     fs.mkdirSync(path.dirname(this.expanded), { recursive: true });
     fs.writeFileSync(this.expanded, buildPage({
-      outCss: this.outCss, brandCss: this.brand, head: this.design.head, body: read(this.boardSrc),
+      outCss: this.outCss, brandCss: this.brand, head: this.design.head, body: this.body,
     }));
   }
 
@@ -50,7 +56,7 @@ class Session {
   inlineCss() {
     fs.mkdirSync(path.dirname(this.rendered), { recursive: true });
     fs.writeFileSync(this.rendered, buildPage({
-      outCss: this.outCss, brandCss: this.brand, head: this.design.head, body: read(this.boardSrc),
+      outCss: this.outCss, brandCss: this.brand, head: this.design.head, body: this.body,
       version: fs.statSync(this.outCss).mtimeMs,
     }));
   }
@@ -60,7 +66,9 @@ class Session {
     const dark = this.design.darkMode;
     const base = { htmlPath: this.rendered, width: this.w };
     // one shared Chrome target: renders are serialized
-    const light = await renderPage(this.chrome, { ...base, dark: null, out: path.join(outDir, 'conversas.light.png') });
+    const light = await renderPage(this.chrome, { ...base, dark: null, out: path.join(outDir, 'conversas.light.png'), collect: nodes.collectScript });
+    // the node map, as the engine writes it after the light render
+    fs.writeFileSync(path.join(outDir, 'nodes.json'), JSON.stringify(nodes.tree(light.collected, this.sources)));
     const darkR = await renderPage(this.chrome, { ...base, dark, out: path.join(outDir, 'conversas.dark.png') });
     return { light, dark: darkR };
   }

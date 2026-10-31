@@ -103,3 +103,78 @@ test('unclosed keeps children', () => {
   const r = components.expand('<x-card>abc', comps({ Card: '<div><slot></slot></div>' }));
   assert.strictEqual(r.html, '<div>abc</div>');
 });
+
+// ---- annotate (node ids for selection) ------------------------------------
+const dnOf = (html) => [...html.matchAll(/<([a-z][a-z0-9-]*)\b[^>]*?\sdata-dn="(\d+)"/gi)].map((m) => [m[1], Number(m[2])]);
+const openTags = (html) => [...html.matchAll(/<[a-z][a-z0-9-]*\b[^>]*>/gi)].map((m) => m[0]);
+
+test('annotate puts a unique data-dn on every element and maps board elements to their path', () => {
+  const r = components.expand('<div class="a"><p>oi <b>x</b></p><img src="i.png"><br/><span>z</span></div>', comps({}),
+    { annotate: true, file: 'boards/x.html' });
+  assert.deepStrictEqual(r.errors, []);
+  const tags = openTags(r.html);
+  assert.strictEqual(tags.length, 6);
+  for (const t of tags) assert.match(t, /\sdata-dn="\d+"/, t);
+  const ks = dnOf(r.html).map(([, k]) => k);
+  assert.strictEqual(new Set(ks).size, ks.length);
+  const by = new Map(dnOf(r.html).map(([tag, k]) => [tag, r.sources.get(k)]));
+  assert.deepStrictEqual(by.get('div'), { file: 'boards/x.html', path: [0], kind: 'element', name: 'div' });
+  assert.deepStrictEqual(by.get('b'), { file: 'boards/x.html', path: [0, 0, 0], kind: 'element', name: 'b' });
+  assert.deepStrictEqual(by.get('img').path, [0, 1]);
+  assert.deepStrictEqual(by.get('br').path, [0, 2]);
+  assert.deepStrictEqual(by.get('span').path, [0, 3]);
+  // the visual markup is unchanged: dropping data-dn gives the plain expansion
+  assert.strictEqual(r.html.replace(/ data-dn="\d+"/g, ''), components.expand('<div class="a"><p>oi <b>x</b></p><img src="i.png"><br/><span>z</span></div>', comps({})).html);
+});
+
+test('annotate maps a component root to its call site and slot children to the caller', () => {
+  const c = comps({
+    Sidebar: '<nav class="w-48"><slot></slot><x-nav-item label="Fixo"></x-nav-item></nav>',
+    NavItem: '<a class="p-2"><span>{{label}}</span></a>',
+  });
+  const r = components.expand('<main><h1>t</h1><x-sidebar><x-nav-item label="A"/><p>livre</p></x-sidebar></main>', c,
+    { annotate: true, file: 'boards/conversas.html' });
+  assert.deepStrictEqual(r.errors, []);
+  assert.ok(!/data-dn-/.test(r.html), 'no temporary markers left');
+  const list = dnOf(r.html).map(([tag, k]) => ({ tag, ...r.sources.get(k) }));
+  assert.strictEqual(list.length, openTags(r.html).length);
+  const nav = list.find((x) => x.tag === 'nav');
+  assert.deepStrictEqual(nav, { tag: 'nav', file: 'components/Sidebar.html', path: [0], kind: 'component', name: 'Sidebar',
+    call: { file: 'boards/conversas.html', path: [0, 1] } });
+  const [a1, a2] = list.filter((x) => x.tag === 'a');
+  assert.deepStrictEqual(a1.call, { file: 'boards/conversas.html', path: [0, 1, 0] }); // instance in the board (slot)
+  assert.deepStrictEqual(a2.call, { file: 'components/Sidebar.html', path: [0, 1] }); // instance inside Sidebar
+  assert.strictEqual(a1.kind, 'component');
+  assert.strictEqual(a1.name, 'NavItem');
+  const spans = list.filter((x) => x.tag === 'span');
+  assert.deepStrictEqual(spans.map((s) => [s.file, s.path, s.kind]), [
+    ['components/NavItem.html', [0, 0], 'element'], ['components/NavItem.html', [0, 0], 'element']]);
+  const p = list.find((x) => x.tag === 'p');
+  assert.deepStrictEqual([p.file, p.path], ['boards/conversas.html', [0, 1, 1]]);
+});
+
+test('annotate: a component whose root is another component keeps the outer instance', () => {
+  const c = comps({ Outer: '<x-inner></x-inner>', Inner: '<div><i>k</i></div>' });
+  const r = components.expand('<x-outer></x-outer>', c, { annotate: true, file: 'boards/b.html' });
+  const [[, k]] = dnOf(r.html);
+  assert.deepStrictEqual(r.sources.get(k), { file: 'components/Inner.html', path: [0], kind: 'component', name: 'Outer',
+    call: { file: 'boards/b.html', path: [0] } });
+});
+
+test('annotate skips comments and script text, numbers raw-param elements, and keeps tailwind classes', () => {
+  const c = comps({ T: '<u>{{{v}}}</u>' });
+  const r = components.expand('<!-- <div> --><script>if (a<b) x("<p>")</script><x-t v="<em>r</em>"></x-t><div class="bg-red-500 p-[3px]"></div>', c,
+    { annotate: true, file: 'boards/b.html' });
+  assert.deepStrictEqual(r.errors, []);
+  assert.match(r.html, /^<!-- <div> --><script data-dn="\d+">if \(a<b\) x\("<p>"\)<\/script>/);
+  const em = dnOf(r.html).find(([t]) => t === 'em');
+  assert.ok(em, r.html);
+  assert.strictEqual(r.sources.get(em[1]).file, 'components/T.html'); // nearest annotated ancestor
+  assert.match(r.html, /class="bg-red-500 p-\[3px\]"/);
+});
+
+test('without annotate the output and result shape are unchanged', () => {
+  const r = components.expand('<div>a</div>', comps({}));
+  assert.strictEqual(r.html, '<div>a</div>');
+  assert.strictEqual(r.sources, undefined);
+});

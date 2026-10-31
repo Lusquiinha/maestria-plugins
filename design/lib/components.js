@@ -119,7 +119,116 @@ function substitute(tpl, params) {
   return out;
 }
 
-function expand(html, comps) {
+// ---- element scanner (node ids) --------------------------------------------
+// Paths are child-element indexes from the file root, counting every element
+// open tag in the source (x- calls included; comments and the text of
+// script/style/textarea/title skipped). Void elements and `/>` have no
+// children. Implicit closes (`<p><div>`) are not modelled: the same scanner
+// resolves a path in the source again, so paths stay consistent with it.
+const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+const RAW = new Set(['script', 'style', 'textarea', 'title']);
+const NAME_AT = /[A-Za-z][A-Za-z0-9-]*/y;
+
+// onOpen({ start, nameEnd, end, tag, path, selfClosing }, parentData) -> data
+// kept for the element's children.
+function scanElements(html, onOpen) {
+  const stack = []; // { tag, path, count, data }
+  let roots = 0;
+  let i = 0;
+  const n = html.length;
+  while (i < n) {
+    const lt = html.indexOf('<', i);
+    if (lt < 0) break;
+    if (html.startsWith('<!--', lt)) {
+      const e = html.indexOf('-->', lt + 4);
+      i = e < 0 ? n : e + 3;
+      continue;
+    }
+    const close = html[lt + 1] === '/';
+    NAME_AT.lastIndex = lt + (close ? 2 : 1);
+    const m = NAME_AT.exec(html);
+    if (!m) {
+      if (html[lt + 1] === '!' || html[lt + 1] === '?') { const gt = html.indexOf('>', lt); i = gt < 0 ? n : gt + 1; }
+      else i = lt + 1;
+      continue;
+    }
+    const tag = m[0].toLowerCase();
+    if (close) {
+      for (let d = stack.length - 1; d >= 0; d--) if (stack[d].tag === tag) { stack.length = d; break; }
+      const gt = html.indexOf('>', lt);
+      i = gt < 0 ? n : gt + 1;
+      continue;
+    }
+    let j = NAME_AT.lastIndex;
+    let quote = null;
+    for (; j < n; j++) {
+      const c = html[j];
+      if (quote) { if (c === quote) quote = null; } else if (c === '"' || c === "'") quote = c;
+      else if (c === '>') break;
+    }
+    if (j >= n) break;
+    const selfClosing = html[j - 1] === '/';
+    const parent = stack[stack.length - 1];
+    const path = parent ? [...parent.path, parent.count++] : [roots++];
+    const data = onOpen({ start: lt, nameEnd: NAME_AT.lastIndex, end: j + 1, tag, path, selfClosing }, parent ? parent.data : undefined);
+    i = j + 1;
+    if (selfClosing || VOID.has(tag)) continue;
+    stack.push({ tag, path, count: 0, data });
+    if (RAW.has(tag)) {
+      const re = new RegExp(`</${tag}[\\s>/]`, 'ig');
+      re.lastIndex = i;
+      const e = re.exec(html);
+      i = e ? e.index : n;
+    }
+  }
+}
+
+// Inserts a temporary origin marker ` data-dn-s="<fid>.<path>"` into every tag
+// (not <slot>: it is replaced by the children; it still counts in paths).
+function mark(src, fid) {
+  let out = '';
+  let last = 0;
+  scanElements(src, (t) => {
+    if (t.tag === 'slot') return;
+    out += src.slice(last, t.nameEnd) + ` data-dn-s="${fid}.${t.path.join('_')}"`;
+    last = t.nameEnd;
+  });
+  return out + src.slice(last);
+}
+
+const S_RE = / data-dn-s="(\d+)\.([\d_]+)"/;
+const C_RE = / data-dn-c="(\d+)\.([\d_]+)\|([A-Za-z0-9]+)"/;
+
+// Replaces the markers with data-dn="k" (every element gets one) and builds
+// the sources map. An element without a marker (html from a {{{raw}}} param)
+// takes the origin of its nearest annotated ancestor.
+function number(html, files) {
+  const sources = new Map();
+  let out = '';
+  let last = 0;
+  let k = 0;
+  const at = (fid, p) => ({ file: files[Number(fid)], path: p.split('_').map(Number) });
+  scanElements(html, (t, parent) => {
+    const tagText = html.slice(t.nameEnd, t.end);
+    const s = S_RE.exec(tagText);
+    const c = C_RE.exec(tagText);
+    let src;
+    if (s) src = { ...at(s[1], s[2]), kind: c ? 'component' : 'element', name: c ? c[3] : t.tag };
+    else src = { ...(parent ? { file: parent.file, path: parent.path } : { file: files[0], path: [] }), kind: 'element', name: t.tag };
+    if (s && c) src.call = at(c[1], c[2]);
+    k++;
+    sources.set(k, src);
+    let rest = tagText;
+    if (s) rest = rest.replace(S_RE, '');
+    if (c) rest = rest.replace(C_RE, '');
+    out += html.slice(last, t.nameEnd) + ` data-dn="${k}"` + rest;
+    last = t.end;
+    return src;
+  });
+  return { html: out + html.slice(last), sources };
+}
+
+function expand(html, comps, { annotate = false, file = 'boards/board.html' } = {}) {
   const uses = new Set();
   const errors = [];
   const byTag = new Map();
@@ -170,14 +279,37 @@ function expand(html, comps) {
         continue;
       }
       const inner = run(children, stack);
-      let body = substitute(comps.get(name), o.attrs);
+      let body;
+      if (annotate) {
+        const attrs = { ...o.attrs };
+        const callS = attrs['data-dn-s'];
+        const callC = attrs['data-dn-c'];
+        delete attrs['data-dn-s'];
+        delete attrs['data-dn-c'];
+        const tpl = template(name);
+        body = substitute(tpl.html, attrs);
+        // the component's top-level elements remember the call (the outermost one wins)
+        const call = callC || (callS ? `${callS}|${name}` : null);
+        if (call) body = body.replace(tpl.top, (m) => `${m} data-dn-c="${call}"`);
+      } else body = substitute(comps.get(name), o.attrs);
       for (const s of SLOTS) body = body.split(s).join(inner);
       out += run(body, [...stack, name]);
     }
     return out;
   }
 
-  return { html: run(html, []), uses, errors };
+  if (!annotate) return { html: run(html, []), uses, errors };
+  const files = [file];
+  const marked = new Map(); // Name -> { html, top }
+  function template(name) {
+    if (!marked.has(name)) {
+      const fid = files.push(`components/${name}.html`) - 1;
+      marked.set(name, { html: mark(comps.get(name), fid), top: new RegExp(` data-dn-s="${fid}\\.\\d+"`, 'g') });
+    }
+    return marked.get(name);
+  }
+  const out = number(run(mark(html, 0), []), files);
+  return { html: out.html, uses, errors, sources: out.sources };
 }
 
 function dependents(boards, changed) {
@@ -186,4 +318,4 @@ function dependents(boards, changed) {
   return out;
 }
 
-module.exports = { load, expand, dependents, NAME_RE };
+module.exports = { load, expand, dependents, scanElements, NAME_RE };
