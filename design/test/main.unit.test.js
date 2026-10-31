@@ -256,3 +256,63 @@ test('novo canvas…: escape at the name or the folder stops quietly', async () 
     assert.ok(!calls.some(([m]) => m === 'folders.list' || m === 'session.openClaude'));
   } finally { await closeAllViews(); }
 });
+
+test('abrir reuses the live claude tab already linked to the canvas (most recent link first)', async () => {
+  const { dirs: [x] } = homeWith('Desktop/Work/co/design/x');
+  main.state.last = { byTab: { 'tab-old': x, 'tab-other': '/elsewhere', 'tab-new': x }, byCwd: {} };
+  const calls = fakeHost({
+    'window.pick': x,
+    'sessions.list': [{ id: 'tab-old', kind: 'claude' }, { id: 'tab-new', kind: 'claude', hibernated: true }, { id: 'tab-sh', kind: 'shell' }],
+  });
+  try {
+    await main.abrir({ cwd: '/w', tabId: 'tab-sh' });
+    assert.ok(!calls.some(([m]) => m === 'session.openClaude'), 'no new session');
+    assert.strictEqual(calls.find(([m]) => m === 'session.focus')[1].tabId, 'tab-new');
+    assert.ok(main.viewOf(x));
+  } finally { await closeAllViews(); }
+});
+
+test('abrir: a linked tab that has exited is not reused', async () => {
+  const { dirs: [x] } = homeWith('Desktop/Work/co/design/x');
+  main.state.last = { byTab: { 'tab-dead': x }, byCwd: {} };
+  const calls = fakeHost({ 'window.pick': x, 'sessions.list': [{ id: 'tab-dead', kind: 'claude', exited: true }], 'session.openClaude': { tabId: 'tab-z' } });
+  try {
+    await main.abrir({});
+    assert.ok(calls.some(([m]) => m === 'session.openClaude'));
+    assert.strictEqual(main.state.last.byTab['tab-z'], x);
+  } finally { await closeAllViews(); }
+});
+
+test('novo canvas… from a focused claude tab still opens a fresh claude in the project', async () => {
+  const { home } = homeWith();
+  main.state.last = { byTab: {}, byCwd: {} };
+  const root = path.join(home, 'Desktop', 'Work', 'co', 'proj');
+  fs.mkdirSync(root, { recursive: true });
+  const realInit = canvasMod.init;
+  canvasMod.init = (dir, opts) => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'canvas.json'), JSON.stringify({ v: 1, title: 'novo', boards: {}, order: [] }));
+    fs.writeFileSync(path.join(dir, 'design.json'), JSON.stringify({ repo: opts.repo }));
+    return { created: true };
+  };
+  let picks = 0;
+  const calls = fakeHost({
+    'window.pick': (p) => { picks += 1; return picks === 1 ? p.items[0].value : root; },
+    'window.input': 'novo',
+    'folders.list': [{ name: 'proj', root }],
+    'sessions.list': [{ id: 'tab-focus', kind: 'claude' }],
+    'session.openClaude': { tabId: 'tab-fresh' },
+  });
+  try {
+    await main.abrir({ cwd: '/w', tabId: 'tab-focus' });
+    const dir = path.join(home, 'Desktop', 'Work', 'co', 'design', 'novo');
+    const oc = calls.find(([m]) => m === 'session.openClaude');
+    assert.ok(oc, 'a fresh claude');
+    assert.strictEqual(oc[1].cwd, root);
+    assert.strictEqual(main.state.last.byTab['tab-fresh'], dir);
+    assert.ok(!('tab-focus' in main.state.last.byTab));
+  } finally {
+    canvasMod.init = realInit;
+    await closeAllViews();
+  }
+});

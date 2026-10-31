@@ -76,7 +76,7 @@ function loadLast() {
 }
 
 function remember(dir, { tabId, cwd } = {}) {
-  if (tabId) state.last.byTab[tabId] = dir;
+  if (tabId) { delete state.last.byTab[tabId]; state.last.byTab[tabId] = dir; } // key order = most recent link last
   if (cwd) state.last.byCwd[cwd] = dir;
   if (!state.last.usedAt) state.last.usedAt = {};
   state.last.usedAt[dir] = Date.now();
@@ -313,20 +313,28 @@ function repoOf(dir) {
   return null;
 }
 
-/** O tab do contexto, se for uma sessão do claude (não um terminal nem o próprio canvas). */
-async function claudeTab(tabId) {
-  if (!tabId) return null;
+/** As sessões do claude vivas (uma hibernada serve), por id. */
+async function liveClaudeTabs() {
   let list;
-  try { list = await mx.request('sessions.list', {}); } catch (e) { mx.log('sessions.list:', errText(e)); return null; }
-  const s = (list || []).find((x) => x && x.id === tabId);
-  return s && s.kind === 'claude' && !s.exited ? tabId : null;
+  try { list = await mx.request('sessions.list', {}); } catch (e) { mx.log('sessions.list:', errText(e)); return new Set(); }
+  return new Set((list || []).filter((x) => x && x.kind === 'claude' && !x.exited).map((x) => x.id));
 }
 
-/** Abre o canvas ao lado do claude do contexto; sem um, abre um claude no repo do canvas. */
-async function openWithSession(dir, context) {
+/**
+ * Abre o canvas ao lado de um claude: o do contexto, senão o último ainda aberto
+ * que já estava ligado a este canvas, senão um novo no repo do canvas.
+ * `fresh` sempre abre um claude novo (o `novo canvas…`).
+ */
+async function openWithSession(dir, context, { fresh = false } = {}) {
   const { cwd } = context || {};
-  const tabId = await claudeTab(context && context.tabId);
-  if (tabId) return openCanvas(dir, { tabId, cwd });
+  if (!fresh) {
+    const live = await liveClaudeTabs();
+    const ctxTab = context && context.tabId;
+    if (ctxTab && live.has(ctxTab)) return openCanvas(dir, { tabId: ctxTab, cwd });
+    const linked = Object.keys(state.last.byTab).filter((t) => state.last.byTab[t] === dir).reverse();
+    const tabId = linked.find((t) => live.has(t));
+    if (tabId) return openCanvas(dir, { tabId, cwd });
+  }
   const repo = repoOf(dir) || cwd || path.dirname(dir);
   const opened = await mx.request('session.openClaude', { cwd: repo, prompt: promptFor(dir) });
   return openCanvas(dir, { tabId: opened && opened.tabId, cwd: repo });
@@ -359,7 +367,7 @@ async function novoCanvas(context) {
   if (!root) return null;
   const dir = canvasMod.defaultDir({ cwd: root, name, home: state.home }) || path.join(path.dirname(root), 'design', name);
   canvasMod.init(dir, { repo: canvasMod.gitRoot(root) });
-  return openWithSession(dir, context);
+  return openWithSession(dir, context, { fresh: true }); // a new canvas gets its own claude, in its project
 }
 
 async function abrir(context) {
