@@ -8,6 +8,9 @@ const path = require('node:path');
 const canvasMod = require('./canvas');
 const components = require('./components');
 const project = require('./project');
+const refs = require('./refs');
+const marks = require('./marks');
+const crop = require('./crop');
 
 const GUIDE = path.join(__dirname, 'guide.md');
 const MAX_BOARDS = 4; // boards with images per design_render call
@@ -19,6 +22,10 @@ const NEED_CWD = 'a sessão não informou a pasta de trabalho: passe `canvas` co
 const NEED_WHERE = 'diga onde criar o canvas (ex.: ~/Desktop/Work/Ninepay/design/<nome>)';
 const NEED_NAME = 'diga o nome do canvas (name) ou a pasta (canvas)';
 const NO_CANVAS = 'nenhum canvas aberto: chame design_open antes';
+const STALE = 'código vencido: selecione de novo';
+const CLAUDE_MAX_SIDE = 1568;
+const MAX_SNIPPET = 6000;
+const DPR = 2; // the canvas pngs are 2x
 
 const CANVAS = { type: 'string', description: 'Canvas folder (absolute, ~/ or relative to the session cwd). Omit to use the canvas last opened in this session.' };
 const NAME = { type: 'string', description: 'Board name: lowercase letters, digits, - and _ (becomes boards/<name>.html).' };
@@ -73,6 +80,16 @@ const SCHEMAS = [
     name: 'design_list',
     description: 'List boards (path, size, components used) and components (path, boards that use them) of a canvas.',
     inputSchema: { type: 'object', properties: { canvas: CANVAS }, additionalProperties: false },
+  },
+  {
+    name: 'design_ref',
+    description: 'Resolve a code like @n12 the user pasted from the canvas: returns the board, the exact source to edit (file:line + snippet; for a component, its call site and its file with the boards that use it) and an image of the element. Call it before editing.',
+    inputSchema: {
+      type: 'object',
+      properties: { ref: { type: 'string', description: 'The code as pasted, e.g. @n12.' }, canvas: CANVAS },
+      required: ['ref'],
+      additionalProperties: false,
+    },
   },
 ];
 
@@ -246,7 +263,59 @@ async function list(args, ctx) {
   return text(lines.join('\n'));
 }
 
-const HANDLERS = { design_open: open, design_board: board, design_render: render, design_focus: focus, design_list: list };
+function fence(snippet) {
+  const cut = snippet.length > MAX_SNIPPET;
+  return ['```html', cut ? `${snippet.slice(0, MAX_SNIPPET)}\n…` : snippet, '```', ...(cut ? ['(cortado: leia o resto no arquivo)'] : [])];
+}
+
+// The element image: the board's 2x light png cut to the node's rect.
+function elementImage(dataDir, board, rect) {
+  let buf;
+  try { buf = fs.readFileSync(path.join(dataDir, 'png', `${board}.light.png`)); } catch { return null; }
+  const out = crop.cropPng(buf, { x: rect.x * DPR, y: rect.y * DPR, w: rect.w * DPR, h: rect.h * DPR }, CLAUDE_MAX_SIDE);
+  return out && out.length <= MAX_IMAGE_BYTES ? out : null;
+}
+
+async function ref(args, ctx) {
+  const dir = resolveFrom(args, ctx);
+  const dataDir = ctx.host.dataDirOf(dir);
+  const R = refs.open(dataDir, dir);
+  const res = R.resolve(args.ref, dir);
+  if (res.unknown) return fail(`código desconhecido neste canvas (${dir}): ${args.ref}`);
+  if (res.stale) return fail(STALE);
+  if (ctx.host.remember) ctx.host.remember(dir, { tabId: ctx.tabId, cwd: ctx.cwd });
+  const abs = (f) => path.join(dir, f);
+  const lines = [`prancheta: ${res.board} (${abs(`boards/${res.board}.html`)})`];
+  if (res.kind === 'component') {
+    lines.push(`instância de ${path.basename(res.componentFile, '.html')}: ${abs(res.file)}:${res.line}`, ...fence(res.snippet));
+  } else {
+    lines.push(`elemento <${res.tag}>: ${abs(res.file)}:${res.line}`, ...fence(res.snippet));
+    if (res.call) lines.push(`instância (a chamada nesta prancheta): ${abs(res.call.file)}:${res.call.line}`, ...fence(res.call.snippet));
+  }
+  if (res.componentFile) {
+    const n = res.usedIn.length;
+    lines.push(`componente: ${abs(res.componentFile)} (usado em ${n} prancheta${n === 1 ? '' : 's'}${n ? `: ${res.usedIn.join(', ')}` : ''})`);
+    if (res.kind === 'component') {
+      let src = '';
+      try { src = fs.readFileSync(abs(res.componentFile), 'utf8'); } catch { /* gone */ }
+      lines.push(...fence(src));
+    }
+    lines.push('pedido sobre esta ocorrência (texto, params) → edite a instância; sobre o estilo/estrutura do componente → edite o componente e avise que muda todas as pranchetas que o usam');
+  }
+  const content = [];
+  let nodesMap = null;
+  try { nodesMap = JSON.parse(fs.readFileSync(path.join(dataDir, 'nodes', `${res.board}.json`), 'utf8')); } catch { /* not rendered yet */ }
+  const node = nodesMap && refs.locate(nodesMap.roots, res);
+  if (node && node.rect) {
+    marks.set(ctx.tabId, { board: res.board, rect: node.rect, canvas: dir });
+    const img = elementImage(dataDir, res.board, node.rect);
+    if (img) content.push({ type: 'image', data: img.toString('base64'), mimeType: 'image/png' });
+  }
+  if (!content.length) lines.push('(sem imagem do elemento: renderize a prancheta com design_render)');
+  return { content: [{ type: 'text', text: lines.join('\n') }, ...content] };
+}
+
+const HANDLERS = { design_open: open, design_board: board, design_render: render, design_focus: focus, design_list: list, design_ref: ref };
 
 async function handle(name, args, ctx) {
   const fn = HANDLERS[name];

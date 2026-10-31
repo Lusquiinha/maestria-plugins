@@ -17,6 +17,19 @@ project's own Tailwind, in light and dark, and shows it on a canvas beside this 
    again. Do not tell the user it is done before you checked both themes.
 4. `design_focus` points the user's canvas at a board; `design_list` shows boards and components.
 
+## Codes from the canvas (`@n…`)
+The user selects an element on the canvas and pastes its code (`@n12`) in the chat.
+- A `@n…` in the user's message → call `design_ref { ref: "@n12" }` BEFORE editing. It returns the
+  board, the exact file:line and snippet to edit, and an image of the element. Edit that spot only.
+- A code points at one instance: three `<x-item>` on a board are three codes. For an element of a
+  component, design_ref gives the instance (the `<x-…>` call on the board) AND the component file,
+  with how many boards use it. Decide by the request:
+  - about this occurrence ("muda o texto deste", a param) → edit the instance (the call);
+  - about the component's style or structure ("muda o estilo do item") → edit the component file and
+    tell the user it changes every board that uses it.
+- `código vencido: selecione de novo` means the source changed since the copy: ask the user to
+  select the element again; do not guess.
+
 ## Rules for boards
 - Use only the project's Tailwind classes and its color families (design_open prints them above
   this guide, in the line `cores do tailwind do projeto`).

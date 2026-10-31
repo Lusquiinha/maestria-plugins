@@ -359,7 +359,8 @@ mx.onRequest('command.invoke', ({ command: id, context }) => {
 });
 
 // What the MCP tools use from here (so tests of lib/tools can fake it).
-const host = { request: mx.request, openCanvas, viewOf, focusBoard, lastFor };
+const dataDirOf = (dir) => path.join(state.dataDir, hashOf(dir)); // the engine's data dir of a canvas
+const host = { request: mx.request, openCanvas, viewOf, focusBoard, lastFor, dataDirOf, remember };
 
 mx.onRequest('tool.call', ({ tool, args, tabId, cwd }) => tools.handle(tool, args, { tabId, cwd, host }));
 

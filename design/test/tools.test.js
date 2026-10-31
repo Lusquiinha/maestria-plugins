@@ -55,6 +55,8 @@ function fakeHost() {
       };
     },
     focusBoard: async (dir, name) => { calls.push(['focus', dir, name]); },
+    dataDirOf: (dir) => path.join(tmp, 'data', path.basename(dir)),
+    remember: (dir, opts) => { calls.push(['remember', dir, opts]); last[opts.tabId] = dir; },
   };
   return host;
 }
@@ -64,7 +66,7 @@ const textOf = (r) => r.content.filter((c) => c.type === 'text').map((c) => c.te
 
 test('manifest-facing schemas: design_ names, object inputSchema', () => {
   assert.deepStrictEqual(tools.SCHEMAS.map((s) => s.name),
-    ['design_open', 'design_board', 'design_render', 'design_focus', 'design_list']);
+    ['design_open', 'design_board', 'design_render', 'design_focus', 'design_list', 'design_ref']);
   for (const s of tools.SCHEMAS) {
     assert.strictEqual(s.inputSchema.type, 'object');
     assert.ok(s.description.length > 20 && s.description.length < 400);
@@ -309,4 +311,73 @@ test('design_open on a design.json without repo is a readable error', async () =
   assert.strictEqual(r.isError, true);
   assert.match(textOf(r), /design\.json.*"repo"/);
   assert.doesNotMatch(textOf(r), /paths\[1\]|TypeError/);
+});
+
+// ---- design_ref ----------------------------------------------------------------
+const refs = require('../lib/refs');
+const marks = require('../lib/marks');
+const crop = require('../lib/crop');
+const { readPng } = require('./png');
+
+function refCanvas() {
+  return withBoards(['a', 'b']).then((host) => {
+    const dir = host.calls.find((c) => c[0] === 'openCanvas')[1];
+    fs.writeFileSync(path.join(dir, 'components', 'NavItem.html'), '<a class="px-2"><span>{{ label }}</span></a>');
+    fs.writeFileSync(path.join(dir, 'boards', 'a.html'), '<nav>\n  <x-nav-item label="Início"></x-nav-item>\n  <x-nav-item label="Sair"></x-nav-item>\n</nav>');
+    fs.writeFileSync(path.join(dir, 'boards', 'b.html'), '<x-nav-item label="x" />');
+    const data = host.dataDirOf(dir);
+    // the nodes map and the 2x light png the engine leaves after a render (board a: 100x60 css px)
+    const call = (i, y) => ({ k: 10 + i, rect: { x: 0, y, w: 100, h: 20 }, kind: 'component', name: 'NavItem', file: 'boards/a.html', path: [0, i],
+      call: { file: 'boards/a.html', path: [0, i] }, componentFile: 'components/NavItem.html',
+      children: [{ k: 20 + i, rect: { x: 0, y, w: 100, h: 20 }, kind: 'element', name: 'a', file: 'components/NavItem.html', path: [0], call: null, componentFile: null,
+        children: [{ k: 30 + i, rect: { x: 4, y: y + 2, w: 40, h: 16 }, kind: 'element', name: 'span', file: 'components/NavItem.html', path: [0, 0], call: null, componentFile: null, children: [] }] }] });
+    const roots = [{ k: 1, rect: { x: 0, y: 0, w: 100, h: 60 }, kind: 'element', name: 'nav', file: 'boards/a.html', path: [0], call: null, componentFile: null, children: [call(0, 0), call(1, 20)] }];
+    fs.mkdirSync(path.join(data, 'nodes'), { recursive: true });
+    fs.writeFileSync(path.join(data, 'nodes', 'a.json'), JSON.stringify({ rev: 1, width: 100, height: 60, roots }));
+    fs.mkdirSync(path.join(data, 'png'), { recursive: true });
+    const w = 200; const h = 120;
+    const raw = Buffer.alloc((w * 3 + 1) * h, 200);
+    for (let y = 0; y < h; y++) raw[y * (w * 3 + 1)] = 0;
+    fs.writeFileSync(path.join(data, 'png', 'a.light.png'), crop.encode(w, h, 3, raw, true));
+    return { host, dir, data, roots };
+  });
+}
+
+test('design_ref returns the call site, the component file with its boards, a crop, and marks the tab', async () => {
+  const { host, dir, data, roots } = await refCanvas();
+  const r = refs.open(data, dir);
+  const code = r.codeFor('a', { ...roots[0].children[1].children[0].children[0], via: refs.viaOf(roots, 31) });
+  const res = await tools.handle('design_ref', { ref: code }, ctxOf(host));
+  assert.ok(!res.isError, textOf(res));
+  const t = textOf(res);
+  assert.match(t, /prancheta: a/);
+  assert.match(t, new RegExp(`${path.join(dir, 'components', 'NavItem.html').replace(/[.]/g, '\\.')}`));
+  assert.match(t, /<span>\{\{ label \}\}<\/span>/, 'the element in the component file');
+  assert.match(t, /boards\/a\.html:3/, 'the call site of the second item, with its line');
+  assert.match(t, /<x-nav-item label="Sair"><\/x-nav-item>/);
+  assert.match(t, /usado em 2 pranchetas: a, b/);
+  const imgs = res.content.filter((c) => c.type === 'image');
+  assert.strictEqual(imgs.length, 1);
+  const p = readPng(Buffer.from(imgs[0].data, 'base64'));
+  assert.deepStrictEqual([p.width, p.height], [80, 32], 'the span rect at 2x');
+  assert.deepStrictEqual(marks.get('t1', Date.now()), { board: 'a', rect: { x: 4, y: 22, w: 40, h: 16 }, canvas: dir });
+  assert.ok(host.calls.some((c) => c[0] === 'remember' && c[1] === dir && c[2].tabId === 't1'));
+});
+
+test('design_ref of a component call gives the call and the component', async () => {
+  const { host, dir, data, roots } = await refCanvas();
+  const code = refs.open(data, dir).codeFor('a', roots[0].children[0]);
+  const t = textOf(await tools.handle('design_ref', { ref: code }, ctxOf(host)));
+  assert.match(t, /<x-nav-item label="Início"><\/x-nav-item>/);
+  assert.match(t, /<a class="px-2">/);
+  assert.match(t, /usado em 2 pranchetas/);
+});
+
+test('design_ref of a stale code is an error with the exact message', async () => {
+  const { host, dir, data, roots } = await refCanvas();
+  const code = refs.open(data, dir).codeFor('a', roots[0].children[1]);
+  fs.writeFileSync(path.join(dir, 'boards', 'a.html'), '<nav><x-nav-item label="Novo"></x-nav-item><x-nav-item label="Início"></x-nav-item><x-nav-item label="Sair!"></x-nav-item></nav>');
+  const r = await tools.handle('design_ref', { ref: code }, ctxOf(host));
+  assert.strictEqual(r.isError, true);
+  assert.strictEqual(textOf(r), 'código vencido: selecione de novo');
 });

@@ -17,7 +17,8 @@
     "onTool:design_board",
     "onTool:design_render",
     "onTool:design_focus",
-    "onTool:design_list"
+    "onTool:design_list",
+    "onTool:design_ref"
   ],
   "permissions": [],
   "contributes": {
@@ -154,6 +155,27 @@
               "description": "Canvas folder (absolute, ~/ or relative to the session cwd). Omit to use the canvas last opened in this session."
             }
           },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "design_ref",
+        "description": "Resolve a code like @n12 the user pasted from the canvas: returns the board, the exact source to edit (file:line + snippet; for a component, its call site and its file with the boards that use it) and an image of the element. Call it before editing.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string",
+              "description": "The code as pasted, e.g. @n12."
+            },
+            "canvas": {
+              "type": "string",
+              "description": "Canvas folder (absolute, ~/ or relative to the session cwd). Omit to use the canvas last opened in this session."
+            }
+          },
+          "required": [
+            "ref"
+          ],
           "additionalProperties": false
         }
       }
