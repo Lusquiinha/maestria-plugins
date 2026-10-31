@@ -63,6 +63,21 @@ function parse(buf) {
   return { ...hdr, ch: CHANNELS[hdr.color], idat: Buffer.concat(idat) };
 }
 
+// Inflates only about the first `need` bytes of a `total`-byte stream: a crop
+// near the top of a tall board does not inflate the whole image. (zlib's
+// maxOutputLength throws instead of truncating, so a growing prefix of the
+// compressed input is inflated with a sync flush.)
+function inflateRows(idat, need, total) {
+  if (need >= total) return zlib.inflateSync(idat);
+  let len = Math.min(idat.length, Math.ceil((idat.length * need * 1.2) / total) + 4096);
+  for (;;) {
+    let out;
+    try { out = zlib.inflateSync(idat.subarray(0, len), { finishFlush: zlib.constants.Z_SYNC_FLUSH }); } catch { return null; }
+    if (out.length >= need || len >= idat.length) return out;
+    len = Math.min(idat.length, len * 2);
+  }
+}
+
 // cropPng(buf, rect in image px, maxSide) -> PNG Buffer, or null when the
 // image cannot be read or the rect misses it. Rows past the rect are never
 // unfiltered; a crop wider/taller than maxSide is box-averaged down.
@@ -76,7 +91,8 @@ function cropPng(buf, rect, maxSide) {
   if (x1 <= x0 || y1 <= y0) return null;
   const bpp = p.ch;
   const stride = p.w * bpp;
-  const raw = zlib.inflateSync(p.idat);
+  const raw = inflateRows(p.idat, (stride + 1) * y1, (stride + 1) * p.h);
+  if (!raw || raw.length < (stride + 1) * y1) return null;
   let prev = Buffer.alloc(stride);
   let cur = Buffer.alloc(stride);
   const cw = x1 - x0;

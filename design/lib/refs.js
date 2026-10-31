@@ -3,8 +3,9 @@
 // A code names a node by where it is written: board + source file + structural
 // path (components.scanElements paths) + the component calls around it (`via`,
 // so the same element in three instances gives three codes). It keeps a SHA-1
-// of the element's outer HTML; resolve() refuses (stale) when the path no
-// longer resolves or that HTML changed. Nothing is written into the sources.
+// of the opening tags on its path (see fingerprint); resolve() refuses (stale)
+// when the path no longer resolves or those tags changed. Nothing is written
+// into the sources.
 // Persisted per canvas in <dataDir>/refs.json.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -43,14 +44,35 @@ function outer(html, p) {
   return { tag: hit.tag, text, line: html.slice(0, hit.start).split('\n').length };
 }
 
+// The fingerprint of the element at `p`: its opening tag plus the opening tags
+// of every ancestor and of every preceding sibling at each level, in source
+// order. Inner content does not count, so editing inside keeps the code; a
+// changed attribute or anything inserted before it on the path makes it stale.
+function fingerprint(html, p) {
+  const parts = [];
+  let found = false;
+  components.scanElements(html, (t) => {
+    const q = t.path;
+    if (q.length > p.length) return;
+    for (let d = 0; d < q.length - 1; d++) if (q[d] !== p[d]) return;
+    const last = q.length - 1;
+    if (q[last] > p[last]) return; // a later sibling
+    if (q.length === p.length && q[last] === p[last]) found = true; // itself (else: ancestor or preceding sibling)
+    parts.push(html.slice(t.start, t.end));
+  });
+  return found ? sha1(parts.join('\n')) : null;
+}
+
 function readSource(canvasDir, file) {
   if (!FILE_RE.test(file)) return null;
   try { return fs.readFileSync(path.join(canvasDir, file), 'utf8'); } catch { return null; }
 }
 
+// { tag, text, line, fp } of the element at `p` in a source file, or null.
 function at(canvasDir, file, p) {
   const html = readSource(canvasDir, file);
-  return html == null ? null : outer(html, p);
+  const o = html == null ? null : outer(html, p);
+  return o && { ...o, fp: fingerprint(html, p) };
 }
 
 // The component calls around node `k` in a nodes tree, outermost first.
@@ -95,6 +117,7 @@ const parseCode = (code) => { const m = /^@?n?(\d+)$/.exec(String(code || '').tr
 
 class Refs {
   constructor(dataDir, canvasDir) {
+    if (!dataDir || !canvasDir) throw new Error('refs.open precisa de dataDir e canvasDir');
     this.file = path.join(dataDir, 'refs.json');
     this.canvasDir = canvasDir;
   }
@@ -118,12 +141,15 @@ class Refs {
   // `via` (viaOf) when it sits inside component calls. Selecting again
   // refreshes the fingerprint under the same code.
   codeFor(board, node, canvasDir = this.canvasDir) {
+    if (String(node.file).startsWith('components/') && !(node.via && node.via.length)) {
+      throw new Error(`codeFor: ${node.file} ${JSON.stringify(node.path)} está num componente e veio sem via (use refs.viaOf)`);
+    }
     const via = (node.via || []).map((v) => ({ file: v.file, path: [...v.path], componentFile: v.componentFile || null }));
     const key = JSON.stringify([board, node.file, node.path, via.map((v) => [v.file, v.path])]);
     const j = this.load();
     let k = j.keys[key];
     if (k == null) { k = j.next++; j.keys[key] = k; }
-    const fp = (file, p) => { const o = at(canvasDir, file, p); return o ? sha1(o.text) : null; };
+    const fp = (file, p) => { const o = at(canvasDir, file, p); return o ? o.fp : null; };
     j.codes[k] = {
       board, file: node.file, path: [...node.path], kind: node.kind, name: node.name,
       componentFile: node.componentFile || null, via, fp: fp(node.file, node.path), viaFp: via.map((v) => fp(v.file, v.path)),
@@ -143,11 +169,11 @@ class Refs {
     const e = this.entry(code);
     if (!e) return { unknown: true };
     const o = at(canvasDir, e.file, e.path);
-    if (!o || !e.fp || sha1(o.text) !== e.fp) return { stale: true };
+    if (!o || !e.fp || o.fp !== e.fp) return { stale: true };
     const sites = [];
     for (let i = 0; i < e.via.length; i++) {
       const v = at(canvasDir, e.via[i].file, e.via[i].path);
-      if (!v || sha1(v.text) !== e.viaFp[i]) return { stale: true };
+      if (!v || !v.fp || v.fp !== e.viaFp[i]) return { stale: true };
       sites.push(v);
     }
     const out = { board: e.board, file: e.file, path: e.path, line: o.line, tag: o.tag, kind: e.kind, snippet: o.text, call: null, usedIn: [], via: e.via };
@@ -175,4 +201,4 @@ class Refs {
 
 const open = (dataDir, canvasDir) => new Refs(dataDir, canvasDir);
 
-module.exports = { open, viaOf, locate, outer, parseCode };
+module.exports = { open, viaOf, locate, outer, fingerprint, parseCode };

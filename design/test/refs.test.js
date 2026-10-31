@@ -89,24 +89,70 @@ test('resolve gives board, file, path, snippet and, for a component, its call si
   assert.deepStrictEqual(p.usedIn, []);
 });
 
-test('stale after a sibling insert that moves the path, or after the element text changes; fine after an unrelated edit', () => {
+test('stale after a sibling insert that moves the path', () => {
   const { dir, data } = canvas({ 'boards/a.html': '<main><p>um</p><p>dois</p></main><footer>f</footer>' });
   const file = path.join(dir, 'boards/a.html');
   const r = refs.open(data, dir);
   const code = r.codeFor('a', el('boards/a.html', [0, 1]));
   const foot = r.codeFor('a', el('boards/a.html', [1]));
   fs.writeFileSync(file, '<main><p>um</p><p>dois</p></main><footer>f</footer><aside></aside>');
-  assert.strictEqual(r.resolve(code, dir).snippet, '<p>dois</p>');
-  fs.writeFileSync(file, '<main><h1>novo</h1><p>um</p><p>dois</p></main><footer>f</footer>');
+  assert.strictEqual(r.resolve(code, dir).snippet, '<p>dois</p>', 'a later sibling does not matter');
+  fs.writeFileSync(file, '<main><x-a></x-a><p>um</p><p>dois</p></main><footer>f</footer>');
   assert.deepStrictEqual(r.resolve(code, dir), { stale: true });
-  assert.strictEqual(r.resolve(foot, dir).snippet, '<footer>f</footer>', 'its path and html did not change');
-  fs.writeFileSync(file, '<main><p>um</p><p>dois!</p></main><footer>f</footer>');
-  assert.deepStrictEqual(r.resolve(code, dir), { stale: true });
-  // selecting it again refreshes the fingerprint under the same code
-  assert.strictEqual(r.codeFor('a', el('boards/a.html', [0, 1])), code);
-  assert.strictEqual(r.resolve(code, dir).snippet, '<p>dois!</p>');
   fs.rmSync(file);
   assert.deepStrictEqual(r.resolve(code, dir), { stale: true });
+  assert.deepStrictEqual(r.resolve(foot, dir), { stale: true });
+});
+
+test('an inner text or child edit keeps the code of the element and of its container (new snippet)', () => {
+  const { dir, data } = canvas({ 'boards/a.html': '<main class="p-4"><p>um</p><p>dois</p></main>' });
+  const file = path.join(dir, 'boards/a.html');
+  const r = refs.open(data, dir);
+  const p = r.codeFor('a', el('boards/a.html', [0, 1]));
+  const main = r.codeFor('a', el('boards/a.html', [0]));
+  fs.writeFileSync(file, '<main class="p-4"><p>um <b>!</b></p><p>dois, agora três</p><span>novo</span></main>');
+  assert.strictEqual(r.resolve(p, dir).snippet, '<p>dois, agora três</p>');
+  assert.strictEqual(r.resolve(main, dir).snippet, '<main class="p-4"><p>um <b>!</b></p><p>dois, agora três</p><span>novo</span></main>');
+});
+
+test('an attribute change on the element makes it stale; selecting again refreshes it under the same code', () => {
+  const { dir, data } = canvas({ 'boards/a.html': '<main><p>um</p><p class="a">dois</p></main>' });
+  const file = path.join(dir, 'boards/a.html');
+  const r = refs.open(data, dir);
+  const code = r.codeFor('a', el('boards/a.html', [0, 1]));
+  fs.writeFileSync(file, '<main><p>um</p><p class="b">dois</p></main>');
+  assert.deepStrictEqual(r.resolve(code, dir), { stale: true });
+  assert.strictEqual(r.codeFor('a', el('boards/a.html', [0, 1])), code);
+  assert.strictEqual(r.resolve(code, dir).snippet, '<p class="b">dois</p>');
+});
+
+test('an attribute-less sibling inserted before it makes it stale', () => {
+  const { dir, data } = canvas({ 'boards/a.html': '<main><p>um</p><p>dois</p></main>' });
+  const r = refs.open(data, dir);
+  const code = r.codeFor('a', el('boards/a.html', [0, 1]));
+  fs.writeFileSync(path.join(dir, 'boards/a.html'), '<main><h1>novo</h1><p>um</p><p>dois</p></main>');
+  assert.deepStrictEqual(r.resolve(code, dir), { stale: true });
+});
+
+test('slot content of the enclosing call changing keeps the code of an element inside the component', () => {
+  const { dir, data } = canvas({
+    'components/Card.html': '<section><h2>{{ t }}</h2><slot></slot></section>',
+    'boards/a.html': '<main><x-card t="um"><p>filho</p></x-card></main>',
+  });
+  const r = refs.open(data, dir);
+  const h2 = r.codeFor('a', { ...el('components/Card.html', [0, 0]), via: [{ file: 'boards/a.html', path: [0, 0], componentFile: 'components/Card.html' }] });
+  fs.writeFileSync(path.join(dir, 'boards/a.html'), '<main><x-card t="um"><p>outro filho</p><ul><li>x</li></ul></x-card></main>');
+  const res = r.resolve(h2, dir);
+  assert.strictEqual(res.snippet, '<h2>{{ t }}</h2>');
+  assert.strictEqual(res.call.snippet, '<x-card t="um"><p>outro filho</p><ul><li>x</li></ul></x-card>');
+  fs.writeFileSync(path.join(dir, 'boards/a.html'), '<main><x-card t="dois"><p>filho</p></x-card></main>');
+  assert.deepStrictEqual(r.resolve(h2, dir), { stale: true }, 'the call itself changed');
+});
+
+test('codeFor refuses a component element without via; open needs the canvas folder', () => {
+  const { dir, data } = canvas({ 'components/Card.html': '<section></section>', 'boards/a.html': '<x-card></x-card>' });
+  assert.throws(() => refs.open(data, dir).codeFor('a', el('components/Card.html', [0])), /via/);
+  assert.throws(() => refs.open(data), /canvasDir/);
 });
 
 test('resolve of an unknown code says so', () => {
@@ -184,8 +230,11 @@ test('every source of an annotated expand resolves to the tag written there', ()
   const exp = components.expand(fs.readFileSync(path.join(dir, 'boards/a.html'), 'utf8'), components.load(dir), { annotate: true, file: 'boards/a.html' });
   const r = refs.open(data, dir);
   assert.ok(exp.sources.size > 8);
+  const viaOf = (rec) => { const v = []; for (let k = rec.inst; k != null; k = exp.sources.get(k).inst) v.unshift({ ...exp.sources.get(k) }); return v; };
+  const anyInst = (file) => [...exp.sources.values()].find((x) => x.file === file && x.inst != null);
   for (const s of exp.sources.values()) {
-    const res = r.resolve(r.codeFor('a', s), dir);
+    const owner = s.inst != null ? s : s.file.startsWith('components/') ? anyInst(s.file) : null;
+    const res = r.resolve(r.codeFor('a', { ...s, via: owner ? viaOf(owner) : [] }), dir);
     assert.ok(!res.stale && !res.unknown, JSON.stringify(s));
     assert.ok(res.snippet.toLowerCase().startsWith(`<${s.tag}`), `${s.tag} ${res.snippet}`);
   }
