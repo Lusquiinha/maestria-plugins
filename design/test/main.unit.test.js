@@ -109,3 +109,150 @@ test('a PreToolUse edit from the linked tab draws a scan until the board renders
     await main.closeView(V.viewId);
   }
 });
+
+// --- abrir / novo canvas -------------------------------------------------------------
+
+const canvasMod = require('../lib/canvas');
+
+function homeWith(...dirs) {
+  const home = fs.mkdtempSync(path.join(tmp, 'home-'));
+  const out = dirs.map((rel) => {
+    const d = path.join(home, rel);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'canvas.json'), JSON.stringify({ v: 1, title: path.basename(d), boards: {}, order: [] }));
+    fs.writeFileSync(path.join(d, 'design.json'), JSON.stringify({ repo: path.join(home, 'repo-of-' + path.basename(d)) }));
+    return d;
+  });
+  main.state.home = home;
+  return { home, dirs: out };
+}
+
+// a fake host: `replies[method]` is a value or (params) => value; every call is logged
+function fakeHost(replies) {
+  const calls = [];
+  answer = async (m, p) => {
+    calls.push([m, p]);
+    const r = replies[m];
+    if (typeof r === 'function') return r(p);
+    if (r !== undefined) return r;
+    return m === 'view.update' ? { open: true } : null;
+  };
+  return calls;
+}
+
+async function closeAllViews() {
+  for (const id of [...main.state.views.keys()]) await main.closeView(id);
+  answer = async () => ({ open: true });
+}
+
+test('abrir: "novo canvas…" first, then the canvases by last use', async () => {
+  const { dirs: [x, y] } = homeWith('Desktop/Work/co/design/x', 'Desktop/Work/co/design/y');
+  main.state.last = { byTab: {}, byCwd: {}, usedAt: { [x]: 1000, [y]: 2000 } };
+  const calls = fakeHost({ 'window.pick': null });
+  try {
+    await main.abrir({});
+    const picks = calls.filter(([m]) => m === 'window.pick');
+    assert.strictEqual(picks.length, 1);
+    const items = picks[0][1].items;
+    assert.strictEqual(items[0].label, 'novo canvas…');
+    assert.deepStrictEqual(items.slice(1).map((i) => i.value), [y, x]);
+    assert.deepStrictEqual(items.slice(1).map((i) => i.label), ['y', 'x']);
+    assert.ok(!calls.some(([m]) => m === 'session.openClaude' || m === 'view.open'), 'cancel does nothing');
+  } finally { await closeAllViews(); }
+});
+
+test('abrir an existing canvas with no session: opens a claude in its repo and the canvas beside it', async () => {
+  const { dirs: [x] } = homeWith('Desktop/Work/co/design/x');
+  main.state.last = { byTab: {}, byCwd: {} };
+  const calls = fakeHost({ 'window.pick': x, 'session.openClaude': { tabId: 'tab-new' }, 'sessions.list': [] });
+  try {
+    await main.abrir({ cwd: '/somewhere' });
+    const oc = calls.find(([m]) => m === 'session.openClaude');
+    assert.ok(oc, 'opened a claude session');
+    assert.strictEqual(oc[1].cwd, JSON.parse(fs.readFileSync(path.join(x, 'design.json'), 'utf8')).repo);
+    assert.strictEqual(oc[1].prompt, `Call design_open with canvas="${x}" and wait for my request.`);
+    const order = calls.map(([m]) => m).filter((m) => ['session.openClaude', 'session.focus', 'view.open'].includes(m));
+    assert.deepStrictEqual(order, ['session.openClaude', 'session.focus', 'view.open']);
+    assert.strictEqual(calls.find(([m]) => m === 'session.focus')[1].tabId, 'tab-new');
+    assert.strictEqual(main.state.last.byTab['tab-new'], x, 'linked to the new tab');
+    assert.ok(main.state.last.usedAt[x] > 0, 'use recorded');
+    assert.ok(main.viewOf(x));
+  } finally { await closeAllViews(); }
+});
+
+test('abrir an existing canvas from a claude tab: opens beside it, no new session', async () => {
+  const { dirs: [x] } = homeWith('Desktop/Work/co/design/x');
+  main.state.last = { byTab: {}, byCwd: {} };
+  const calls = fakeHost({ 'window.pick': x, 'sessions.list': [{ id: 'tab-1', kind: 'claude' }] });
+  try {
+    await main.abrir({ cwd: '/w', tabId: 'tab-1' });
+    assert.ok(!calls.some(([m]) => m === 'session.openClaude'));
+    assert.strictEqual(main.state.last.byTab['tab-1'], x);
+    assert.ok(main.viewOf(x));
+  } finally { await closeAllViews(); }
+});
+
+test('abrir from a tab that is not claude (a shell, the canvas itself) opens a claude', async () => {
+  const { dirs: [x] } = homeWith('Desktop/Work/co/design/x');
+  main.state.last = { byTab: {}, byCwd: {} };
+  const calls = fakeHost({ 'window.pick': x, 'sessions.list': [{ id: 'tab-1', kind: 'plugin' }], 'session.openClaude': { tabId: 'tab-2' } });
+  try {
+    await main.abrir({ cwd: '/w', tabId: 'tab-1' });
+    assert.ok(calls.some(([m]) => m === 'session.openClaude'));
+    assert.strictEqual(main.state.last.byTab['tab-2'], x);
+  } finally { await closeAllViews(); }
+});
+
+test('novo canvas…: name → folder → init → claude session → canvas, in that order', async () => {
+  const { home } = homeWith();
+  main.state.last = { byTab: {}, byCwd: {} };
+  const root = path.join(home, 'Desktop', 'Work', 'co', 'proj');
+  fs.mkdirSync(root, { recursive: true });
+  const seq = [];
+  const realInit = canvasMod.init;
+  canvasMod.init = (dir, opts) => {
+    seq.push('init');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'canvas.json'), JSON.stringify({ v: 1, title: 'meu', boards: {}, order: [] }));
+    fs.writeFileSync(path.join(dir, 'design.json'), JSON.stringify({ repo: opts.repo }));
+    return { created: true };
+  };
+  let picks = 0;
+  const inputs = ['Nome Ruim', 'meu'];
+  const calls = fakeHost({
+    'window.pick': (p) => { picks += 1; return picks === 1 ? p.items[0].value : root; },
+    'window.input': () => inputs.shift(),
+    'folders.list': [{ name: 'proj', root }, { name: 'outro', root: path.join(home, 'outro') }],
+    'session.openClaude': { tabId: 'tab-n' },
+    'sessions.list': [],
+  });
+  const realAnswer = answer;
+  answer = async (m, p) => { seq.push(m); return realAnswer(m, p); };
+  try {
+    await main.abrir({});
+    const dir = path.join(home, 'Desktop', 'Work', 'co', 'design', 'meu');
+    const flow = seq.filter((m) => ['window.pick', 'window.input', 'folders.list', 'init', 'session.openClaude', 'view.open'].includes(m));
+    assert.deepStrictEqual(flow, ['window.pick', 'window.input', 'window.input', 'folders.list', 'window.pick', 'init', 'session.openClaude', 'view.open']);
+    const inp = calls.filter(([m]) => m === 'window.input');
+    assert.match(inp[1][1].prompt, /minúsculas/, 'a bad name asks again, saying why');
+    const folderPick = calls.filter(([m]) => m === 'window.pick')[1][1];
+    assert.deepStrictEqual(folderPick.items.map((i) => i.label), ['proj', 'outro']);
+    const oc = calls.find(([m]) => m === 'session.openClaude')[1];
+    assert.strictEqual(oc.cwd, root);
+    assert.strictEqual(oc.prompt, `Call design_open with canvas="${dir}" and wait for my request.`);
+    assert.strictEqual(main.state.last.byTab['tab-n'], dir);
+    assert.ok(main.viewOf(dir));
+  } finally {
+    canvasMod.init = realInit;
+    await closeAllViews();
+  }
+});
+
+test('novo canvas…: escape at the name or the folder stops quietly', async () => {
+  homeWith();
+  const calls = fakeHost({ 'window.pick': (p) => p.items[0].value, 'window.input': null });
+  try {
+    await main.abrir({});
+    assert.ok(!calls.some(([m]) => m === 'folders.list' || m === 'session.openClaude'));
+  } finally { await closeAllViews(); }
+});

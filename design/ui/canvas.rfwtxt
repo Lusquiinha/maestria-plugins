@@ -1,12 +1,13 @@
-// O canvas do Design: a barra em cima e, embaixo, as pranchetas num `ZoomView`
-// (arrastar move, a rodinha aproxima em volta do cursor). Cada prancheta é um
-// `Positioned` na posição do canvas.json (em `data.boards`, já calculada pelo
-// plugin): o nome em cima e as imagens claro e escuro lado a lado.
+// O canvas do Design: a barra em cima (o título e um menu só) e, embaixo, as
+// pranchetas num `ZoomView` (arrastar move, a rodinha aproxima em volta do
+// cursor). Cada prancheta é um `Positioned` na posição do canvas.json (em
+// `data.boards`, já calculada pelo plugin): o nome em cima e as imagens claro e
+// escuro lado a lado.
 //
-// Os cliques voltam como `event "act"` com a ação em `a` (ou em `action`, nos
-// menus): "zoom:in", "zoom:out", "zoom:fit", "seguir", "focus:<nome>",
-// "tema:<light|dark|both>"; o `ZoomView` conta a escala em "zoom" (extra
-// `scale`) e o arrasto do usuário em "move" (extra `scale`, `x`, `y`).
+// Os cliques voltam como `event "act"` com a ação em `a` (ou em `action`, no
+// menu `data.menu`): "seguir", "focus:<nome>", "tema:<light|dark|both>"; o
+// `ZoomView` conta a escala em "zoom" (extra `scale`) e o arrasto do usuário em
+// "move" (extra `scale`, `x`, `y`).
 //
 // `data.scans` são os retângulos do scanner (px do canvas, já nas duas cópias
 // no modo "ambos").
@@ -40,47 +41,8 @@ widget Bar = Container(
       Expanded(
         child: Text(text: data.title, maxLines: 1, overflow: "ellipsis", style: { fontSize: 16.0, fontWeight: "w600", color: data.theme.fg }),
       ),
-      IconButton(icon: "remove", tooltip: "afastar", onPressed: event "act" { a: "zoom:out" }),
-      SizedBox(
-        width: 48.0,
-        child: Text(text: data.zoomLabel, textAlign: "center", style: { fontSize: 14.0, color: data.theme.dim }),
-      ),
-      IconButton(icon: "add", tooltip: "aproximar", onPressed: event "act" { a: "zoom:in" }),
-      SizedBox(width: 4.0),
-      Pressable(
-        radius: 6.0,
-        padding: [10.0, 4.0, 10.0, 4.0],
-        hoverColor: data.theme.hover,
-        onTap: event "act" { a: "zoom:fit" },
-        child: Text(text: "ajustar", style: { fontSize: 16.0, color: data.theme.fg }),
-      ),
-      SizedBox(width: 8.0),
-      Text(text: data.themeLabel, style: { fontSize: 16.0, color: data.theme.fg }),
-      MenuButton(icon: "image", tooltip: "tema: claro, escuro ou os dois lado a lado", menu: data.themeMenu, onMenu: event "act" {}),
-      SizedBox(width: 4.0),
-      Follow(),
-      SizedBox(width: 4.0),
-      MenuButton(icon: "layers", tooltip: "as pranchetas: clique pra ir até uma", menu: data.listMenu, onMenu: event "act" {}),
+      MenuButton(icon: "more", tooltip: "tema, pranchetas e seguir o claude", menu: data.menu, onMenu: event "act" {}),
     ],
-  ),
-);
-
-widget Follow = Tooltip(
-  message: "quando o claude cria ou muda uma prancheta, o canvas vai até ela (se você não mexeu no canvas há pouco)",
-  child: Pressable(
-    radius: 6.0,
-    padding: [8.0, 4.0, 10.0, 4.0],
-    color: switch data.follow { true: data.theme.active, default: 0x00000000 },
-    hoverColor: data.theme.hover,
-    onTap: event "act" { a: "seguir" },
-    child: Row(
-      mainAxisSize: "min",
-      children: [
-        Glyph(icon: switch data.follow { true: "check", default: "dot" }, size: 14.0, color: switch data.follow { true: data.theme.accent, default: data.theme.faint }),
-        SizedBox(width: 6.0),
-        Text(text: "seguir o claude", style: { fontSize: 16.0, color: switch data.follow { true: data.theme.fg, default: data.theme.dim } }),
-      ],
-    ),
   ),
 );
 

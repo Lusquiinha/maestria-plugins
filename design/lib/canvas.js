@@ -139,4 +139,29 @@ function init(dir, { repo }) {
   return { created };
 }
 
-module.exports = { read, write, upsertBoard, resolveDir, defaultDir, init, validName, gitRoot };
+const isCanvas = (dir) => fs.existsSync(path.join(dir, 'canvas.json'));
+
+function subdirs(dir) {
+  try { return fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(dir, d.name)); } catch { return []; }
+}
+
+/**
+ * The canvases the user can open: `<home>/Desktop/Work/<empresa>/design/<canvas>`
+ * plus the ones in the history (`last`: last.json, with `usedAt[dir]` in ms),
+ * most recently used first, then by name.
+ */
+function list({ home = os.homedir(), last = {} } = {}) {
+  const found = new Set();
+  for (const company of subdirs(path.join(home, 'Desktop', 'Work'))) {
+    for (const dir of subdirs(path.join(company, 'design'))) if (isCanvas(dir)) found.add(dir);
+  }
+  for (const dir of [...Object.values(last.byTab || {}), ...Object.values(last.byCwd || {})]) {
+    if (typeof dir === 'string' && isCanvas(dir)) found.add(path.resolve(dir));
+  }
+  const usedAt = last.usedAt || {};
+  return [...found]
+    .map((dir) => ({ dir, name: path.basename(dir), lastUsed: Number(usedAt[dir]) || 0 }))
+    .sort((a, b) => b.lastUsed - a.lastUsed || a.name.localeCompare(b.name) || a.dir.localeCompare(b.dir));
+}
+
+module.exports = { read, write, upsertBoard, resolveDir, defaultDir, init, validName, gitRoot, list };

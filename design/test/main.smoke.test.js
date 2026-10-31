@@ -20,7 +20,14 @@ function host(env = {}) {
   const waiters = [];
   let buf = '';
   let id = 0;
-  const replies = { 'view.open': { tabId: 't9' }, 'view.update': { open: true } };
+  const replies = {
+    'view.open': { tabId: 't9' },
+    'view.update': { open: true },
+    // `design: abrir` lists every canvas: pick the test's own (under the tmp dir)
+    'window.pick': (p) => ((p.items || []).find((i) => i.value.startsWith(os.tmpdir())) || {}).value || null,
+    'sessions.list': [{ id: 't1', kind: 'claude' }],
+    'session.openClaude': { tabId: 't1' },
+  };
   proc.stdout.on('data', (d) => {
     buf += d;
     let i;
@@ -32,7 +39,8 @@ function host(env = {}) {
       msgs.push(m);
       if (m.method && m.id !== undefined) {
         const result = api.reply ? api.reply(m) : undefined;
-        proc.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: m.id, result: result !== undefined ? result : (replies[m.method] ?? null) })}\n`);
+        const dflt = typeof replies[m.method] === 'function' ? replies[m.method](m.params || {}) : replies[m.method];
+        proc.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: m.id, result: result !== undefined ? result : (dflt ?? null) })}\n`);
       }
       if (process.env.DEBUG_SMOKE) console.error(line.length > 2000 ? line.slice(0, 120) + " ... " + line.slice(-400) : line);
       for (const w of [...waiters]) if (w.pred(m)) { waiters.splice(waiters.indexOf(w), 1); clearTimeout(w.t); w.resolve(m); }
@@ -99,10 +107,8 @@ test('answers initialize and exits when stdin closes', async () => {
   try {
     const r = await h.request('initialize', { apiVersion: 1, rfw: 2, dataDir: tmp });
     assert.deepStrictEqual(r.result, {});
-    const c = await h.request('command.invoke', { command: 'ajustar', context: {} });
-    assert.strictEqual(c.result, null);
-    const b = await h.wait((m) => m.method === 'window.showBanner');
-    assert.match(b.params.text, /nenhum canvas aberto/);
+    const c = await h.request('command.invoke', { command: 'ajustar', context: {} }); // gone: zoom is the wheel and the keys
+    assert.match(c.error.message, /comando desconhecido: ajustar/);
     h.proc.stdin.end();
     assert.strictEqual(await h.exited, 0);
   } finally {
@@ -151,7 +157,7 @@ test('abrir opens the canvas beside the session, renders boards, and leaves no o
     // the user pans: the next save only highlights
     const rev1 = hl.params.data.boards.find((b) => b.name === board.name).rev;
     h.send({ method: 'view.action', params: { viewId: open.params.viewId, action: 'act', values: { a: 'move', scale: 2, x: 10, y: 10 } } });
-    await h.wait((m) => m.method === 'view.update' && m.params.data && m.params.data.zoomLabel === '200%');
+    await sleep(200); // the move only marks the user's navigation (no update)
     const n1 = h.msgs.length;
     fs.writeFileSync(file, src.replace('class="', 'class="[--smoke:2] '));
     const hl2 = await h.wait((m) => h.msgs.indexOf(m) >= n1 && m.method === 'view.update' && m.params.data

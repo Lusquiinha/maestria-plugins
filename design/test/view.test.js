@@ -44,7 +44,6 @@ test('theme both: box = 2w + 24, laid out without overlap', () => {
   assert.strictEqual(d.title, 'toasts');
   assert.strictEqual(d.theme, 'both');
   assert.strictEqual(d.picture, true);
-  assert.deepStrictEqual(d.list, [{ name: 'a', title: 'a' }, { name: 'b', title: 'Toast pequeno' }]);
   noNull(d);
 });
 
@@ -122,17 +121,37 @@ test('without picture: sprite sheets copied into the plugin cache, per rev', () 
   noNull(d);
 });
 
-test('highlight flags only the named board; zoom label from the scale', () => {
+test('highlight flags only the named board', () => {
   const d = build({ ui: { highlight: 'b', scale: 1.5 } });
   assert.deepStrictEqual(d.boards.map((b) => b.highlight), [false, true]);
-  assert.strictEqual(d.zoomLabel, '150%');
-  assert.strictEqual(build().zoomLabel, '100%');
 });
 
-test('board focus action and list menu use focus:<name>', () => {
+test('one menu: tema, seguir o claude and the boards; no zoom data', () => {
   const d = build();
   assert.strictEqual(d.boards[0].focus, 'focus:a');
-  assert.deepStrictEqual(d.listMenu.map((m) => m.action), ['focus:a', 'focus:b']);
+  for (const k of ['zoomLabel', 'themeLabel', 'themeMenu', 'listMenu', 'list']) assert.ok(!(k in d), `${k} still in the data`);
+  const acts = d.menu.map((m) => m.action || m.type);
+  assert.deepStrictEqual(acts, ['tema:light', 'tema:dark', 'tema:both', 'divider', 'seguir', 'divider', 'focus:a', 'focus:b']);
+  const item = (a, m = d.menu) => m.find((x) => x.action === a);
+  assert.strictEqual(item('tema:both').icon, 'check'); // the current theme and follow on are checked
+  assert.ok(!item('tema:light').icon);
+  assert.strictEqual(item('seguir').icon, 'check');
+  assert.strictEqual(item('focus:b').label, 'Toast pequeno');
+  const off = build({ ui: { theme: 'dark', follow: false } }).menu;
+  assert.strictEqual(item('tema:dark', off).icon, 'check');
+  assert.ok(!item('seguir', off).icon);
+  const empty = view.build({ canvas: { title: 'x', boards: {}, order: [], warnings: [] }, states: new Map(), ui: ui(), caps: CAPS, hash: HASH });
+  assert.deepStrictEqual(empty.menu.map((m) => m.action || m.type), ['tema:light', 'tema:dark', 'tema:both', 'divider', 'seguir']);
+  noNull(d);
+});
+
+test('the toolbar: the title and a single menu, no zoom buttons', () => {
+  const lib = fs.readFileSync(path.join(__dirname, '..', 'ui', 'canvas.rfwtxt'), 'utf8').replace(/\/\/.*$/gm, '');
+  assert.strictEqual((lib.match(/MenuButton\(/g) || []).length, 1);
+  assert.match(lib, /MenuButton\(icon: "more", tooltip: "[^"]+", menu: data\.menu, onMenu: event "act" \{\}\)/);
+  for (const gone of ['zoom:in', 'zoom:out', 'zoom:fit', 'ajustar', 'zoomLabel', 'IconButton', 'Follow(']) {
+    assert.ok(!lib.includes(gone), `${gone} still in the toolbar`);
+  }
 });
 
 test('empty canvas still has a size and no nulls', () => {
@@ -171,9 +190,9 @@ test('manifest: id, main, activation events, commands', () => {
   assert.strictEqual(m.name, 'Design');
   assert.strictEqual(m.maestria, 1);
   assert.deepStrictEqual(m.main, ['node', 'main.js']);
-  assert.deepStrictEqual(m.activationEvents, ['onCommand:abrir', 'onCommand:ajustar', 'onTool:design_open', 'onTool:design_board', 'onTool:design_render', 'onTool:design_focus', 'onTool:design_list', 'onTool:design_ref', 'onHook:PreToolUse']);
+  assert.deepStrictEqual(m.activationEvents, ['onCommand:abrir', 'onTool:design_open', 'onTool:design_board', 'onTool:design_render', 'onTool:design_focus', 'onTool:design_list', 'onTool:design_ref', 'onHook:PreToolUse']);
   assert.deepStrictEqual(m.permissions, ['sessions.create', 'hooks']);
-  assert.deepStrictEqual(m.contributes.commands, [{ id: 'abrir', title: 'design: abrir' }, { id: 'ajustar', title: 'design: ajustar' }]);
+  assert.deepStrictEqual(m.contributes.commands, [{ id: 'abrir', title: 'design: abrir' }]);
   assert.ok(fs.existsSync(path.join(__dirname, '..', m.icon)));
 });
 

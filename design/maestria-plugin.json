@@ -12,7 +12,6 @@
   ],
   "activationEvents": [
     "onCommand:abrir",
-    "onCommand:ajustar",
     "onTool:design_open",
     "onTool:design_board",
     "onTool:design_render",
@@ -30,10 +29,6 @@
       {
         "id": "abrir",
         "title": "design: abrir"
-      },
-      {
-        "id": "ajustar",
-        "title": "design: ajustar"
       }
     ],
     "tools": [

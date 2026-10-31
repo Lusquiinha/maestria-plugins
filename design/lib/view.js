@@ -14,7 +14,6 @@ const ERROR_H = 56; // the error line under the images (two lines of 16 px)
 const EMPTY = { w: 1200, h: 800 };
 const BORDER = 2; // the highlight border (always drawn, transparent when off)
 const THEMES = ['both', 'light', 'dark'];
-const THEME_LABEL = { both: 'ambos', light: '☀', dark: '☾' };
 
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const num = (n) => typeof n === 'number' && Number.isFinite(n);
@@ -144,22 +143,24 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [] }) {
     } else zoom.command = 'fit';
   }
 
-  const scale = num(ui.scale) && ui.scale > 0 ? ui.scale : 1;
+  // the one menu of the bar: theme, follow and the boards (zoom is the wheel and the keys)
+  const check = (on) => (on ? { icon: 'check' } : {});
+  const menu = [
+    { action: 'tema:light', label: 'claro', ...check(theme === 'light') },
+    { action: 'tema:dark', label: 'escuro', ...check(theme === 'dark') },
+    { action: 'tema:both', label: 'claro e escuro lado a lado', ...check(theme === 'both') },
+    { type: 'divider' },
+    { action: 'seguir', label: 'seguir o claude', ...check(!!ui.follow) },
+  ];
+  if (out.length) menu.push({ type: 'divider' }, ...out.map((b) => ({ action: b.focus, label: b.title, icon: 'layers' })));
+
   return {
     title: (canvas && canvas.title) || '',
-    zoomLabel: `${Math.round(scale * 100)}%`,
     theme,
-    themeLabel: THEME_LABEL[theme],
-    themeMenu: [
-      { action: 'tema:light', label: '☀ claro' },
-      { action: 'tema:dark', label: '☾ escuro' },
-      { action: 'tema:both', label: 'ambos lado a lado' },
-    ],
     follow: !!ui.follow,
+    menu,
     boards: out,
     scans: scanRects,
-    list: out.map((b) => ({ name: b.name, title: b.title })),
-    listMenu: out.map((b) => ({ action: b.focus, label: b.title })),
     hasBoards: out.length > 0,
     warnings: ((canvas && canvas.warnings) || []).map(String),
     hasWarnings: !!(canvas && canvas.warnings && canvas.warnings.length),
