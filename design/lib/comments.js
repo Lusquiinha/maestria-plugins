@@ -5,7 +5,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const AUTHORS = new Set(['arthur', 'claude']);
+// 'user' is the person at the canvas; 'arthur' is how older files named them.
+const AUTHORS = new Set(['user', 'claude']);
+const LEGACY = { arthur: 'user' };
+const authorOf = (a) => LEGACY[a] || a;
+const normalize = (items) => items.map((c) => (Array.isArray(c.replies)
+  ? { ...c, replies: c.replies.map((r) => (r && LEGACY[r.author] ? { ...r, author: authorOf(r.author) } : r)) }
+  : c));
 
 function writeAtomic(file, text) {
   const tmp = `${file}.${process.pid}.tmp`;
@@ -18,7 +24,7 @@ function open(canvasDir) {
   const load = () => {
     try {
       const d = JSON.parse(fs.readFileSync(file, 'utf8'));
-      return { next: Number.isInteger(d.next) ? d.next : 1, items: Array.isArray(d.items) ? d.items : [] };
+      return { next: Number.isInteger(d.next) ? d.next : 1, items: Array.isArray(d.items) ? normalize(d.items) : [] };
     } catch (e) {
       if (e && e.code === 'ENOENT') return { next: 1, items: [] };
       throw new Error(`comments.json ilegível (${e.message}): corrija ou apague o arquivo`);
@@ -48,13 +54,14 @@ function open(canvasDir) {
       save(d);
       return id;
     },
-    reply(id, { author, text, done }) {
-      if (!AUTHORS.has(author)) throw new Error(`autor inválido: ${author}`);
+    reply(id, { author: who, text, done }) {
+      const author = authorOf(who);
+      if (!AUTHORS.has(author)) throw new Error(`autor inválido: ${who}`);
       const d = load();
       const c = find(d, id);
       c.replies.push({ author, text, at: now() });
       if (done) c.status = 'feito';
-      else if (author === 'arthur' && c.status === 'feito') c.status = 'aberto';
+      else if (author === 'user' && c.status === 'feito') c.status = 'aberto';
       save(d);
     },
     edit(id, text) {

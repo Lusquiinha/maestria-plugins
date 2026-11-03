@@ -398,7 +398,7 @@ test('parentOf finds the parent (null at the top)', () => {
 
 const PINS = [
   { id: 1, board: 'a', rect: { x: 10, y: 20, w: 200, h: 30 }, status: 'aberto', text: 'mais escuro', replies: [] },
-  { id: 7, board: 'b', rect: { x: 5, y: 5, w: 100, h: 50 }, status: 'feito', text: 'tirar a borda', replies: [{ author: 'claude', text: 'tirei', at: 'x' }, { author: 'arthur', text: 'ok', at: 'y' }] },
+  { id: 7, board: 'b', rect: { x: 5, y: 5, w: 100, h: 50 }, status: 'feito', text: 'tirar a borda', replies: [{ author: 'claude', text: 'tirei', at: 'x' }, { author: 'user', text: 'ok', at: 'y' }] },
 ];
 const pinned = (o = {}) => build({ caps: o.caps || SEL, ui: o.ui, extra: { pins: PINS, ...o.extra } });
 
@@ -439,7 +439,7 @@ test('pins keep their on-screen size: divided by scale x fit', () => {
 test('pins: tooltip is the comment then each reply; the menu replies, edits, deletes', () => {
   const [one, , seven] = pinned().pins;
   assert.strictEqual(one.tooltip, '#1 · mais escuro');
-  assert.strictEqual(seven.tooltip, '#7 · tirar a borda\nClaude: tirei\nArthur: ok');
+  assert.strictEqual(seven.tooltip, '#7 · tirar a borda\nClaude: tirei\nVocê: ok');
   assert.deepStrictEqual(seven.menu, [
     { action: 'reply:7', label: 'Responder…' },
     { action: 'edit:7', label: 'Editar…' },

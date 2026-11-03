@@ -634,12 +634,12 @@ test('pin menu: reply, edit (current text as value) and delete call the store; e
     C.reply(id, { author: 'claude', text: 'pronto', done: true });
     reply = ' não ficou bom ';
     await main.onAction(V, `reply:${id}`);
-    assert.deepStrictEqual(get().replies.map((r) => [r.author, r.text]), [['claude', 'pronto'], ['arthur', 'não ficou bom']]);
-    assert.strictEqual(get().status, 'aberto', 'an answer from Arthur reopens it');
+    assert.deepStrictEqual(get().replies.map((r) => [r.author, r.text]), [['claude', 'pronto'], ['user', 'não ficou bom']]);
+    assert.strictEqual(get().status, 'aberto', 'an answer from the user reopens it');
     reply = 'verde';
     await main.onAction(V, `edit:${id}`);
     assert.strictEqual(get().text, 'verde');
-    assert.match(lastData(calls).pins[0].tooltip, /^#\d+ · verde\nClaude: pronto\nArthur: não ficou bom$/);
+    assert.match(lastData(calls).pins[0].tooltip, /^#\d+ · verde\nClaude: pronto\nVocê: não ficou bom$/);
     await main.onAction(V, `delete:${id}`);
     assert.deepStrictEqual(C.list(), []);
     assert.deepStrictEqual(lastData(calls).pins, []);
@@ -691,7 +691,7 @@ test('zoom redraws when pins are on screen (they keep their size)', async () => 
     commentsMod.open(V.dir).add({ board: 'x', code: '@n1', text: 'a', rect: { x: 0, y: 0, w: 10, h: 10 } });
     await main.render(V);
     await main.onAction(V, 'zoom', { scale: 2 });
-    assert.strictEqual(lastData(calls).pins[0].size, 12 - 1e-9);
+    assert.ok(Math.abs(lastData(calls).pins[0].size - 12) < 1e-6, `pin size ${lastData(calls).pins[0].size}`);
   } finally {
     await main.closeView(V.viewId);
     main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };

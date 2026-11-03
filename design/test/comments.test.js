@@ -39,15 +39,31 @@ test('ids are never reused after a remove', () => {
   assert.strictEqual(C.add({ board: 'a', code: '@n4', text: 'w' }), b + 2);
 });
 
-test('done marks feito; an arthur reply reopens; claude reply without done keeps it', () => {
+test('done marks feito; a user reply reopens; claude reply without done keeps it', () => {
   const C = comments.open(fresh());
   const id = C.add({ board: 'a', code: '@n1', text: 'x' });
   C.reply(id, { author: 'claude', text: 'ok', done: true });
   assert.strictEqual(C.list()[0].status, 'feito');
   C.reply(id, { author: 'claude', text: 'nota' });
   assert.strictEqual(C.list()[0].status, 'feito');
-  C.reply(id, { author: 'arthur', text: 'ainda não' });
+  C.reply(id, { author: 'user', text: 'ainda não' });
   assert.strictEqual(C.list()[0].status, 'aberto');
+  assert.strictEqual(C.list()[0].replies[2].author, 'user');
+});
+
+test('a legacy "arthur" author reads (and writes) as "user"; others are refused', () => {
+  const dir = fresh();
+  fs.writeFileSync(path.join(dir, 'comments.json'), JSON.stringify({
+    next: 2,
+    items: [{ id: 1, board: 'a', code: '@n1', text: 'x', status: 'feito', created: 't', replies: [{ author: 'claude', text: 'ok', at: 't' }, { author: 'arthur', text: 'não', at: 't' }] }],
+  }));
+  const C = comments.open(dir);
+  assert.deepStrictEqual(C.list()[0].replies.map((r) => r.author), ['claude', 'user']);
+  C.reply(1, { author: 'arthur', text: 'de novo' });
+  assert.strictEqual(C.list()[0].status, 'aberto', 'a legacy user reply reopens too');
+  assert.deepStrictEqual(C.list()[0].replies.map((r) => r.author), ['claude', 'user', 'user']);
+  assert.ok(!fs.readFileSync(path.join(dir, 'comments.json'), 'utf8').includes('arthur'));
+  assert.throws(() => C.reply(1, { author: 'fulano', text: 'x' }), /autor inválido: fulano/);
 });
 
 test('list filters by status', () => {

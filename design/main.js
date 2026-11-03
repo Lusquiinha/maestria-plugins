@@ -425,7 +425,7 @@ async function onPin(V, verb, id) {
     else if (verb === 'reply') {
       const text = typed(await mx.request('window.input', { title: 'Responder', ...COMMENT_INPUT }));
       if (!text) return null;
-      C.reply(c.id, { author: 'arthur', text });
+      C.reply(c.id, { author: 'user', text });
     } else {
       const text = typed(await mx.request('window.input', { title: 'Editar comentário', ...COMMENT_INPUT, value: c.text }));
       if (!text || text === c.text) return null;

@@ -416,8 +416,11 @@ test('design_comments with none says so; design_comment_reply on unknown id is a
 
 test('guide: comments section says design_ref before editing; output hints it', () => {
   const g = fs.readFileSync(path.join(__dirname, '..', 'lib', 'guide.md'), 'utf8');
-  const sec = g.slice(g.indexOf('## Comentários'));
-  assert.match(sec, /design_comments[\s\S]*design_ref[\s\S]*depois edite[\s\S]*design_comment_reply/);
+  assert.ok(g.includes('## Comments'), 'the section is in English like the rest of the guide');
+  const sec = g.slice(g.indexOf('## Comments'));
+  assert.match(sec, /design_comments[\s\S]*design_ref[\s\S]*then edit[\s\S]*design_comment_reply/);
+  assert.match(sec, /the user/);
+  assert.ok(!/Arthur/.test(g), 'no hard-coded person');
 });
 
 test('design_comment_reply rejects empty text; corrupt comments.json is not overwritten', async () => {
