@@ -70,7 +70,7 @@ than the image limit) plus the images. A board with an error keeps its previous 
 
 ## Comentários
 O Arthur deixa comentários nos elementos (botão direito, "Comentar…") e depois pede "faz os comentários".
-Nesse caso: `design_comments` (só os abertos); para cada um, edite o que ele pede (o resultado traz arquivo,
-linha e componente; um código vencido ou desconhecido não se chuta) e chame `design_comment_reply` com o que
+Nesse caso: `design_comments` (só os abertos); para cada um, primeiro `design_ref <código>` (marca o elemento
+e mostra o trecho), depois edite o que ele pede (um código vencido ou desconhecido não se chuta) e chame `design_comment_reply` com o que
 mudou e `done: true`. Em dúvida, ou se não deu para fazer, responda com `done: false`: o comentário fica aberto.
 Comentários feitos continuam no canvas até o Arthur apagar.

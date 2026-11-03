@@ -396,6 +396,7 @@ test('design_comments lists with the resolved ref, reports stale and unknown; fi
   assert.ok(!r.isError);
   assert.match(t, new RegExp(`#${ok} \\[aberto\\] a ${code.replace('@', '@')}`));
   assert.match(t, /mais largo/);
+  assert.match(t, /antes de editar: design_ref @n/);
   assert.match(t, /components\/NavItem\.html/);
   assert.match(t, /desconhecido/);
   fs.writeFileSync(path.join(dir, 'boards', 'a.html'), '<p>outro</p>\n<nav>\n  <x-nav-item label="Início"></x-nav-item>\n</nav>');
@@ -411,4 +412,22 @@ test('design_comments with none says so; design_comment_reply on unknown id is a
   const r = await tools.handle('design_comment_reply', { id: 42, text: 'x', done: false }, ctxOf(host));
   assert.strictEqual(r.isError, true);
   assert.strictEqual(textOf(r), 'Comentário 42 não existe');
+});
+
+test('guide: comments section says design_ref before editing; output hints it', () => {
+  const g = fs.readFileSync(path.join(__dirname, '..', 'lib', 'guide.md'), 'utf8');
+  const sec = g.slice(g.indexOf('## Comentários'));
+  assert.match(sec, /design_comments[\s\S]*design_ref[\s\S]*depois edite[\s\S]*design_comment_reply/);
+});
+
+test('design_comment_reply rejects empty text; corrupt comments.json is not overwritten', async () => {
+  const { host, dir } = await refCanvas();
+  const id = commentsMod.open(dir).add({ board: 'a', code: '@n1', text: 'x' });
+  const r = await tools.handle('design_comment_reply', { id, text: '  ', done: true }, ctxOf(host));
+  assert.strictEqual(r.isError, true);
+  assert.match(textOf(r), /vazio/);
+  fs.writeFileSync(path.join(dir, 'comments.json'), '{oops');
+  const r2 = await tools.handle('design_comment_reply', { id, text: 'ok', done: true }, ctxOf(host));
+  assert.strictEqual(r2.isError, true);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'comments.json'), 'utf8'), '{oops');
 });

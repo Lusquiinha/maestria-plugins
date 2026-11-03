@@ -19,7 +19,10 @@ function open(canvasDir) {
     try {
       const d = JSON.parse(fs.readFileSync(file, 'utf8'));
       return { next: Number.isInteger(d.next) ? d.next : 1, items: Array.isArray(d.items) ? d.items : [] };
-    } catch { return { next: 1, items: [] }; }
+    } catch (e) {
+      if (e && e.code === 'ENOENT') return { next: 1, items: [] };
+      throw new Error(`comments.json ilegível (${e.message}): corrija ou apague o arquivo`);
+    }
   };
   const save = (d) => writeAtomic(file, `${JSON.stringify(d, null, 2)}\n`);
   const find = (d, id) => {

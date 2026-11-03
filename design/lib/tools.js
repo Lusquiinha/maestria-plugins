@@ -354,13 +354,14 @@ async function commentsList(args, ctx) {
       lines.push(`  elemento <${res.tag || res.name || '?'}>: ${path.join(dir, res.file)}:${res.line}`);
       if (res.call) lines.push(`  instância: ${path.join(dir, res.call.file)}:${res.call.line}`);
       if (res.componentFile) lines.push(`  componente: ${path.join(dir, res.componentFile)} (usado em: ${res.usedIn.join(', ') || 'nenhuma prancheta'})`);
-      lines.push(`  detalhes: design_ref ${c.code}`);
+      lines.push(`  antes de editar: design_ref ${c.code}`);
     }
   }
   return text(lines.join('\n'));
 }
 
 async function commentReply(args, ctx) {
+  if (!String(args.text == null ? '' : args.text).trim()) return fail('texto da resposta vazio');
   const dir = resolveFrom(args, ctx);
   commentsMod.open(dir).reply(args.id, { author: 'claude', text: String(args.text), done: args.done === true });
   return text(`resposta registrada no comentário ${args.id}${args.done === true ? ' (feito)' : ''}`);
