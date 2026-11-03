@@ -37,6 +37,7 @@ test('the sidebar data: the text, then the canvases opening on click', () => {
   const data = sidebar.data([{ dir: '/w/co/design/a', name: 'a', project: 'site' }, { dir: '/w/co/design/b', name: 'b', project: '' }]);
   assert.strictEqual(data.text, 'Para criar um design novo, peça ao Claude numa sessão: "cria uma tela de…"');
   assert.strictEqual(data.hasCanvases, true);
+  assert.strictEqual(data.heading, 'Designs feitos');
   assert.deepStrictEqual(data.canvases, [
     { name: 'a', project: 'site', hasProject: true, open: 'open:/w/co/design/a' },
     { name: 'b', project: '', hasProject: false, open: 'open:/w/co/design/b' },
@@ -48,6 +49,15 @@ test('the sidebar data with no canvas: only the text', () => {
   assert.strictEqual(data.hasCanvases, false);
   assert.deepStrictEqual(data.canvases, []);
   assert.match(data.text, /^Para criar um design novo/);
+});
+
+test('the sidebar ui: a "Designs feitos" ruler above the canvases, only when there are any; rounded hover rows', () => {
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'ui', 'sidebar.rfwtxt'), 'utf8').replace(/\/\/.*$/gm, '');
+  // the ruler looks like the app's own "Janelas"/"Comandos": 11 px, bold, faint
+  assert.match(ui, /switch data\.hasCanvases \{\s*true: Ruler\(\)/);
+  assert.match(ui, /widget Ruler = [\s\S]*Text\(text: data\.heading, style: \{ fontSize: 11\.0, fontWeight: "w700", color: data\.theme\.faint \}/);
+  assert.ok(ui.indexOf('Ruler()') < ui.indexOf('for c in data.canvases'), 'above the list');
+  assert.match(ui, /widget Canvas = Pressable\([\s\S]*radius: 6\.0/);
 });
 
 test('the sidebar blocks (apps without rfw): the text and a list', () => {

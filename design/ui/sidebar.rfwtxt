@@ -1,6 +1,7 @@
 // A aba do Design na lateral da Maestria (o cabeçalho "Design" e a lista
 // "Janelas" são do app). Primeiro o recado de como criar um design novo, depois
-// os canvases, o usado por último primeiro. Os dados chegam em `data.text` e
+// a régua "Designs feitos" (só com canvases) e os canvases, o usado por último
+// primeiro. Os dados chegam em `data.text`, `data.heading`, `data.hasCanvases` e
 // `data.canvases` (`name`, `project`, `hasProject`, `open`), as cores em
 // `data.theme`. Um clique num canvas vira `event "act"` com `a: "open:<pasta>"`.
 
@@ -11,15 +12,25 @@ widget root = ListView(
   padding: [14.0, 8.0, 14.0, 16.0],
   children: [
     Text(text: data.text, style: { fontSize: 16.0, color: data.theme.dim }),
-    SizedBox(height: 12.0),
+    switch data.hasCanvases {
+      true: Ruler(),
+      default: SizedBox(height: 12.0),
+    },
     ...for c in data.canvases:
       Canvas(c: c),
   ],
 );
 
+// Como as réguas "Janelas"/"Comandos" do app: 11 px, negrito, cor apagada.
+widget Ruler = Padding(
+  padding: [8.0, 12.0, 8.0, 4.0],
+  child: Text(text: data.heading, style: { fontSize: 11.0, fontWeight: "w700", color: data.theme.faint }),
+);
+
 widget Canvas = Pressable(
   onTap: event "act" { a: args.c.open },
   hoverColor: data.theme.hover,
+  radius: 6.0,
   child: Padding(
     padding: [8.0, 6.0, 8.0, 6.0],
     child: Column(
