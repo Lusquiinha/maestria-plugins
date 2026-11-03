@@ -123,6 +123,25 @@ test('render(forClaude) superseded by a save (the file watcher) still returns a 
   await eng.close();
 });
 
+test('busy(board): true from a pending save (debounce or queued job) until its render lands', async () => {
+  const eng = makeEngine();
+  const seen = [];
+  fakeRender(eng, () => { seen.push(eng.busy('a')); });
+  assert.strictEqual(eng.busy('a'), false);
+  eng.debounce('b:a', () => {});
+  assert.strictEqual(eng.busy('a'), true, 'a save waiting for its debounce');
+  clearTimeout(eng.timers.get('b:a'));
+  eng.timers.delete('b:a');
+  assert.strictEqual(eng.busy('a'), false);
+  const job = eng.schedule(['a']);
+  assert.strictEqual(eng.busy('a'), true, 'queued');
+  assert.strictEqual(eng.busy('b'), false, 'only that board');
+  await job;
+  assert.deepStrictEqual(seen, [true], 'in flight');
+  assert.strictEqual(eng.busy('a'), false, 'landed');
+  await eng.close();
+});
+
 function fakeChrome() {
   const c = new EventEmitter();
   c.exited = false;

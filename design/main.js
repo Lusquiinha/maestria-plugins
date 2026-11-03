@@ -377,12 +377,14 @@ function clearSelection(V) {
 }
 
 // The short code of the selected node (null when nothing is selected); throws
-// when its source changed after the image (refs.checkFresh).
+// when its source changed after the image (refs.checkFresh) or while the board
+// has a render pending or in flight (its node map is about to change).
 function selectionCode(V) {
   const sel = V.ui.sel;
   const tree = sel && nodesOf(V, sel.board);
   const node = tree && view.findNode(tree, sel.k);
   if (!node) return null;
+  if (V.engine && typeof V.engine.busy === 'function' && V.engine.busy(sel.board)) throw new Error(refs.STALE_SCREEN);
   return { node, code: refs.open(dataDirOf(V.dir), V.dir).codeFor(sel.board, { ...node, via: refs.viaOf(tree.roots, node.k) }) };
 }
 

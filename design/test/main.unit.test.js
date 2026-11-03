@@ -635,6 +635,31 @@ test('comment with a corrupt comments.json: its message before the dialog (no ty
   }
 });
 
+test('codes are refused while the board has a render pending or in flight (copy, ctrl+c, comment)', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return m === 'window.input' ? 'x' : { open: true }; };
+  const V = await selCanvas('sel-busy');
+  try {
+    withSource(V);
+    let busy = true;
+    V.engine.busy = (b) => busy && b === 'x';
+    const stale = () => calls.filter((c) => c.m === 'window.showBanner' && c.p.text === 'A tela mudou: espere a imagem nova').length;
+    await main.onAction(V, 'copy:x:1');
+    await main.onAction(V, 'key', { key: 'ctrl+c' });
+    await main.onAction(V, 'comment:x:1');
+    assert.ok(!calls.some((c) => c.m === 'clipboard.write' || c.m === 'window.input'), 'no code handed out');
+    assert.strictEqual(stale(), 3);
+    assert.deepStrictEqual(commentsMod.open(V.dir).list(), []);
+    busy = false;
+    await main.onAction(V, 'key', { key: 'ctrl+c' });
+    assert.match(calls.find((c) => c.m === 'clipboard.write').p.text, /^@n\d+$/);
+  } finally {
+    answer = async () => ({ open: true });
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
 test('pin menu: reply, edit (current text as value) and delete call the store; empty or cancel do nothing', async () => {
   const calls = [];
   let reply = null;

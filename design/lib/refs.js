@@ -23,6 +23,9 @@ const samePath = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === 
 const site = (n) => ({ file: n.file, path: n.path, componentFile: n.componentFile || null });
 
 // The end of the element opened at `open` (counts nested same-name tags).
+// The message when a code is asked for while the image on screen is older than its source.
+const STALE_SCREEN = 'A tela mudou: espere a imagem nova';
+
 function closeOf(html, open) {
   if (open.selfClosing || VOID.has(open.tag)) return open.end;
   const re = new RegExp(`<!--|<(/?)${open.tag}(?=[\\s/>])`, 'gi');
@@ -153,7 +156,7 @@ class Refs {
       if (!FILE_RE.test(f)) continue;
       let at;
       try { at = fs.statSync(path.join(canvasDir, f)).mtimeMs; } catch { continue; }
-      if (at > mapAt) throw new Error('A tela mudou: espere a imagem nova');
+      if (at > mapAt) throw new Error(STALE_SCREEN);
     }
   }
 
@@ -247,4 +250,4 @@ class Refs {
 
 const open = (dataDir, canvasDir) => new Refs(dataDir, canvasDir);
 
-module.exports = { open, viaOf, locate, outer, fingerprint, parseCode };
+module.exports = { STALE_SCREEN, open, viaOf, locate, outer, fingerprint, parseCode };
