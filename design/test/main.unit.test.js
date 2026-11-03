@@ -263,6 +263,7 @@ test('sidebar.shown: the tab gets its library once and the canvases, most recent
     const d = ups[1].data;
     assert.strictEqual(d.text, 'Para criar um design novo, peça ao Claude numa sessão: "cria uma tela de…"');
     assert.deepStrictEqual(d.canvases.map((c) => [c.name, c.project, c.open]), [['y', 'repo-of-y', `open:${y}`], ['x', 'repo-of-x', `open:${x}`]]);
+    assert.ok(ups.every((u) => u.windows === false), 'the app\'s own windows list is hidden');
   } finally {
     await notified.event({ type: 'sidebar.hidden' });
     await closeAllViews();
@@ -284,6 +285,26 @@ test('the sidebar follows the canvas list while shown, and stays quiet when hidd
     await main.openCanvas(y, {});
     await sleep(10);
     assert.strictEqual(sidebarUpdates(calls).length, n);
+  } finally { await closeAllViews(); }
+});
+
+test('the sidebar highlights the open canvases and follows open and close', async () => {
+  const { dirs: [x, y] } = homeWith('Desktop/Work/co/design/x', 'Desktop/Work/co/design/y');
+  main.state.last = { byTab: {}, byCwd: {}, usedAt: { [x]: 1000, [y]: 2000 } };
+  const calls = fakeHost({ 'sidebar.update': { shown: true } });
+  const active = () => Object.fromEntries(sidebarUpdates(calls).pop().data.canvases.map((c) => [c.name, c.active]));
+  try {
+    await notified.event({ type: 'sidebar.shown' });
+    assert.deepStrictEqual(active(), { x: false, y: false });
+    await main.openCanvas(x, {});
+    await sleep(10);
+    assert.deepStrictEqual(active(), { x: true, y: false });
+    await main.openCanvas(y, {});
+    await sleep(10);
+    assert.deepStrictEqual(active(), { x: true, y: true });
+    await main.closeView(main.viewOf(x).viewId);
+    await sleep(10);
+    assert.deepStrictEqual(active(), { x: false, y: true });
   } finally { await closeAllViews(); }
 });
 

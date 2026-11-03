@@ -32,8 +32,9 @@ function canvases({ home = os.homedir(), last = {} } = {}) {
   return canvasMod.list({ home, last }).map((c) => ({ ...c, project: projectOf(c.dir) }));
 }
 
-function data(list) {
-  const items = (list || []).map((c) => ({ name: c.name, project: c.project || '', hasProject: !!c.project, open: `open:${c.dir}` }));
+// `openDirs`: the canvas folders open in a Design view (highlighted, like the open conversation).
+function data(list, { openDirs } = {}) {
+  const items = (list || []).map((c) => ({ name: c.name, project: c.project || '', hasProject: !!c.project, open: `open:${c.dir}`, active: !!(openDirs && openDirs.has(c.dir)) }));
   return { text: TEXT, heading: HEADING, canvases: items, hasCanvases: items.length > 0 };
 }
 

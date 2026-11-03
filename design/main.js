@@ -277,6 +277,7 @@ async function openCanvas(input, { tabId, cwd } = {}) {
     failed: false,
   };
   state.views.set(viewId, V);
+  pushSidebar(); // the open canvas is highlighted
   startProbe();
   V.ready = startEngine(V); // Chrome and Tailwind start while the view opens
   try {
@@ -610,7 +611,9 @@ async function abrir(context) {
 async function pushSidebar() {
   if (!state.sidebarShown || state.exiting) return;
   const list = canvasList();
-  const params = state.caps.rfw ? { data: sidebar.data(list) } : { blocks: sidebar.blocks(list) };
+  const openDirs = new Set([...state.views.values()].map((V) => V.dir));
+  // `windows: false` hides the app's own "Janelas" list (apps that don't know it ignore it)
+  const params = state.caps.rfw ? { data: sidebar.data(list, { openDirs }), windows: false } : { blocks: sidebar.blocks(list), windows: false };
   if (state.caps.rfw && !state.sidebarLibrarySent) params.rfw = { library: fs.readFileSync(SIDEBAR_FILE, 'utf8'), root: 'root' };
   try {
     const res = await mx.request('sidebar.update', params);

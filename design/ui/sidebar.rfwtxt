@@ -1,8 +1,8 @@
-// A aba do Design na lateral da Maestria (o cabeçalho "Design" e a lista
-// "Janelas" são do app). Primeiro o recado de como criar um design novo, depois
+// A aba do Design na lateral da Maestria (o cabeçalho "Design" é do app; a lista
+// "Janelas" fica escondida com `windows: false`). Primeiro o recado de como criar um design novo, depois
 // a régua "Designs feitos" (só com canvases) e os canvases, o usado por último
 // primeiro. Os dados chegam em `data.text`, `data.heading`, `data.hasCanvases` e
-// `data.canvases` (`name`, `project`, `hasProject`, `open`), as cores em
+// `data.canvases` (`name`, `project`, `hasProject`, `open`, `active`: aberto numa view), as cores em
 // `data.theme`. Um clique num canvas vira `event "act"` com `a: "open:<pasta>"`.
 
 import core.widgets;
@@ -11,7 +11,7 @@ import maestria;
 widget root = ListView(
   padding: [14.0, 8.0, 14.0, 16.0],
   children: [
-    Text(text: data.text, style: { fontSize: 16.0, color: data.theme.dim }),
+    Text(text: data.text, style: { fontSize: 14.0, color: data.theme.dim }),
     switch data.hasCanvases {
       true: Ruler(),
       default: SizedBox(height: 12.0),
@@ -31,7 +31,12 @@ widget Canvas = Pressable(
   onTap: event "act" { a: args.c.open },
   hoverColor: data.theme.hover,
   radius: 6.0,
-  child: Padding(
+  child: Container(
+    decoration: {
+      type: "box",
+      color: switch args.c.active { true: data.theme.active, default: 0x00000000 },
+      borderRadius: [{ x: 6.0 }],
+    },
     padding: [8.0, 6.0, 8.0, 6.0],
     child: Column(
       crossAxisAlignment: "start",

@@ -39,9 +39,14 @@ test('the sidebar data: the text, then the canvases opening on click', () => {
   assert.strictEqual(data.hasCanvases, true);
   assert.strictEqual(data.heading, 'Designs feitos');
   assert.deepStrictEqual(data.canvases, [
-    { name: 'a', project: 'site', hasProject: true, open: 'open:/w/co/design/a' },
-    { name: 'b', project: '', hasProject: false, open: 'open:/w/co/design/b' },
+    { name: 'a', project: 'site', hasProject: true, open: 'open:/w/co/design/a', active: false },
+    { name: 'b', project: '', hasProject: false, open: 'open:/w/co/design/b', active: false },
   ]);
+});
+
+test('the sidebar data: the canvases open in a Design view are active', () => {
+  const data = sidebar.data([{ dir: '/w/a', name: 'a' }, { dir: '/w/b', name: 'b' }, { dir: '/w/c', name: 'c' }], { openDirs: new Set(['/w/a', '/w/c']) });
+  assert.deepStrictEqual(data.canvases.map((c) => c.active), [true, false, true]);
 });
 
 test('the sidebar data with no canvas: only the text', () => {
@@ -58,6 +63,9 @@ test('the sidebar ui: a "Designs feitos" ruler above the canvases, only when the
   assert.match(ui, /widget Ruler = [\s\S]*Text\(text: data\.heading, style: \{ fontSize: 11\.0, fontWeight: "w700", color: data\.theme\.faint \}/);
   assert.ok(ui.indexOf('Ruler()') < ui.indexOf('for c in data.canvases'), 'above the list');
   assert.match(ui, /widget Canvas = Pressable\([\s\S]*radius: 6\.0/);
+  // the open canvas is a filled row, like the selected conversation in the app
+  assert.match(ui, /color: switch args\.c\.active \{ true: data\.theme\.active, default: 0x00000000 \}/);
+  assert.match(ui, /Text\(text: data\.text, style: \{ fontSize: 14\.0/);
 });
 
 test('the sidebar blocks (apps without rfw): the text and a list', () => {
