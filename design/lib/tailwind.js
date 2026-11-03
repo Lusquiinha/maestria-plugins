@@ -3,6 +3,7 @@ const { spawn, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const project = require('./project');
+const standalone = require('./standalone');
 
 const BUILD_TIMEOUT_MS = 5000; // incremental builds
 const FIRST_BUILD_TIMEOUT_MS = 15000; // the first one also loads the config and scans the content; loaded machines pass 5 s
@@ -82,9 +83,17 @@ class Tailwind {
     if (this.detected.tailwind.version >= 4) {
       // the project's entry css brings its @theme/@custom-variant; source(none)
       // keeps Tailwind from scanning the repo, @source points it at the boards
-      const entry = this.detected.tailwind.input || this.opts.input;
+      let entry = this.detected.tailwind.input || this.opts.input;
+      let ownDark = false;
+      if (entry && this.detected.tailwind.bundled) {
+        const text = project.portableEntry(fs.readFileSync(entry, 'utf8'), path.dirname(entry));
+        ownDark = /@custom-variant\s+dark\b/.test(text);
+        entry = path.join(dir, 'project.css');
+        fs.writeFileSync(entry, text);
+      }
       const base = `@import ${JSON.stringify(entry || 'tailwindcss')} source(none);\n@source ${JSON.stringify(contentGlob)};\n`;
-      fs.writeFileSync(input, `${base}${extras}\n`);
+      const dark = this.detected.tailwind.bundled && !ownDark ? '@custom-variant dark (&:where(.dark, .dark *));\n' : '';
+      fs.writeFileSync(input, `${base}${dark}${extras}\n`);
       this.args = ['-i', input, '-o', outCss, '--watch=always'];
     } else {
       const cfg = path.join(dir, 'tailwind.config.cjs');
@@ -129,6 +138,9 @@ class Tailwind {
   }
 
   async init() {
+    if (this.detected.tailwind?.bundled) {
+      this.detected.tailwind.bin = await standalone.ensure({ log: this.log, ...this.opts.standalone });
+    }
     this._writeInputs();
     const since = Date.now();
     this._spawn();

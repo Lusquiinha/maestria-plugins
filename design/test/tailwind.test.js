@@ -36,9 +36,30 @@ function fixture() {
   return fx;
 }
 
-test('detect throws without tailwind in node_modules', () => {
+test('without tailwind in node_modules detect falls back to the bundled v4', () => {
   const empty = fs.mkdtempSync(path.join(tmp, 'empty-'));
-  assert.throws(() => project.detect(empty), /o projeto não tem tailwind em node_modules/);
+  assert.deepStrictEqual(project.detect(empty), {
+    tailwind: { version: 4, bin: null, bundled: true, config: null, input: null }, sass: null,
+  });
+});
+
+test('the bundled tailwind gets a class-based dark variant and the plain tailwindcss import', async () => {
+  const root = fs.mkdtempSync(path.join(tmp, 'cache-'));
+  const a = { name: 'fake', sha256: 'x', url: 'http://unused' };
+  const bin = require('../lib/standalone').binPath(root, a);
+  fs.mkdirSync(path.dirname(bin), { recursive: true });
+  fs.writeFileSync(bin, '#!/bin/sh\nwhile [ "$1" != "-o" ]; do shift; done\necho "/*css*/" > "$2"\necho "Done in 1ms" >&2\nsleep 30\n', { mode: 0o755 });
+  const out = path.join(fs.mkdtempSync(path.join(tmp, 'out-')), 'tw.css');
+  const repoDir = fs.mkdtempSync(path.join(tmp, 'plain-'));
+  const tw = await tailwind.start({ repoDir, contentGlob: '/x/**/*.html', outCss: out, standalone: { root, a } });
+  try {
+    const input = fs.readFileSync(path.join(path.dirname(out), 'input.css'), 'utf8');
+    assert.match(input, /^@import "tailwindcss" source\(none\);/);
+    assert.match(input, /@custom-variant dark \(&:where\(\.dark, \.dark \*\)\);/);
+    assert.strictEqual(tw.detected.tailwind.bin, bin);
+  } finally {
+    await tw.stop();
+  }
 });
 
 test('detect finds bin, version, config and no sass', { skip: !have && 'no node_modules' }, () => {

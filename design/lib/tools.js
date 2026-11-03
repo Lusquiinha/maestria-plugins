@@ -22,6 +22,7 @@ const MAX_POS = 100000;
 const NEED_CWD = 'a sessão não informou a pasta de trabalho: passe `canvas` com o caminho completo';
 const NEED_WHERE = 'diga onde criar o canvas (ex.: ~/Desktop/Work/Ninepay/design/<nome>)';
 const NEED_NAME = 'diga o nome do canvas (name) ou a pasta (canvas)';
+const needRepo = (names) => `esta pasta tem vários repositórios (${names.join(', ')}): chame design_open de novo com \`repo\` apontando pro repositório desta tela`;
 const NO_CANVAS = 'nenhum canvas aberto: chame design_open antes';
 const STALE = 'código vencido: selecione de novo';
 const CLAUDE_MAX_SIDE = 1568;
@@ -37,7 +38,11 @@ const SCHEMAS = [
     description: 'Open (or create) a design canvas beside this session and get the folder layout, board list and the writing guide. Call it first, once per session. Pass `canvas` for an existing/explicit folder, or `name` to create <company>/design/<name> next to the repo.',
     inputSchema: {
       type: 'object',
-      properties: { canvas: CANVAS, name: { type: 'string', description: 'New canvas name when no folder is given: lowercase letters, digits, - and _.' } },
+      properties: {
+        canvas: CANVAS,
+        name: { type: 'string', description: 'New canvas name when no folder is given: lowercase letters, digits, - and _.' },
+        repo: { type: 'string', description: "Repository this design is for (absolute, ~/ or relative to the session cwd): its Tailwind theme and colors style the boards. Omit to use the session's repo; pass it when the session folder holds several repos. A repo without Tailwind gets the default palette." },
+      },
       additionalProperties: false,
     },
   },
@@ -156,6 +161,14 @@ async function open(args, ctx) {
   let dir;
   let repo = null;
   try {
+    const repoArg = args.repo ? canvasMod.resolveDir(args.repo, { cwd: ctx.cwd, home }) : null;
+    if (repoArg && !fs.existsSync(repoArg)) return fail(`repo não existe: ${repoArg}`);
+    const base = repoArg || ctx.cwd;
+    const pickRepo = () => {
+      if (repoArg || !ctx.cwd || canvasMod.insideRepo(ctx.cwd)) return null;
+      const repos = canvasMod.childRepos(ctx.cwd);
+      return repos.length > 1 ? fail(needRepo(repos)) : null;
+    };
     if (args.canvas && !ctx.cwd && !/^(\/|~\/)/.test(String(args.canvas).trim())) return fail(NEED_CWD);
     if (!args.canvas && !ctx.cwd && !ctx.host.lastFor({ tabId: ctx.tabId, cwd: ctx.cwd })) return fail(NEED_CWD);
     if (args.canvas) dir = canvasMod.resolveDir(args.canvas, { cwd: ctx.cwd, home });
@@ -163,31 +176,43 @@ async function open(args, ctx) {
       const known = !args.name && ctx.host.lastFor({ tabId: ctx.tabId, cwd: ctx.cwd });
       if (known) dir = known;
       else {
-        if (!canvasMod.defaultDir({ cwd: ctx.cwd, name: args.name || 'x', home })) return fail(NEED_WHERE);
+        const ask = pickRepo();
+        if (ask) return ask;
+        if (!canvasMod.defaultDir({ cwd: base, name: args.name || 'x', home })) return fail(NEED_WHERE);
         if (!args.name) return fail(NEED_NAME);
-        dir = canvasMod.defaultDir({ cwd: ctx.cwd, name: args.name, home });
+        dir = canvasMod.defaultDir({ cwd: base, name: args.name, home });
       }
     }
-    if (!ctx.cwd && !fs.existsSync(path.join(dir, 'design.json'))) return fail(NEED_CWD);
-    repo = ctx.cwd ? canvasMod.gitRoot(ctx.cwd) : null;
+    const fresh = !fs.existsSync(path.join(dir, 'design.json'));
+    if (!base && fresh) return fail(NEED_CWD);
+    if (fresh) {
+      const ask = pickRepo();
+      if (ask) return ask;
+    }
+    repo = base ? canvasMod.gitRoot(base) : null;
     canvasMod.init(dir, { repo });
   } catch (e) { return fail(errText(e)); }
   let designRepo = repo;
   try { designRepo = JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8')).repo || repo; } catch { /* keep */ }
   if (!designRepo || typeof designRepo !== 'string') {
-    return fail(`${path.join(dir, 'design.json')} não diz o projeto: preencha "repo" com a pasta do repositório (a que tem o tailwind)`);
+    return fail(`${path.join(dir, 'design.json')} não diz o projeto: preencha "repo" com a pasta do repositório`);
   }
   let V;
   try { V = await ctx.host.openCanvas(dir, { tabId: ctx.tabId, cwd: ctx.cwd }); } catch (e) { return fail(errText(e)); }
   let canvas;
   try { canvas = canvasMod.read(dir); } catch (e) { return fail(errText(e)); }
-  const families = project.colorFamilies(path.resolve(dir, designRepo));
+  const repoDir = path.resolve(dir, designRepo);
+  const detected = project.detect(repoDir).tailwind;
+  const own = !detected.bundled || Boolean(detected.input);
+  const families = own ? project.colorFamilies(repoDir) : [];
   const lines = [
     `canvas: ${dir}`,
     `repo: ${designRepo}`,
     `boards (${canvas.order.length}):`,
     ...(canvas.order.length ? boardList(canvas, dir) : ['- nenhuma ainda: crie com design_board']),
-    `cores do tailwind do projeto: ${families.length ? families.join(', ') : '(não consegui listar; leia o tailwind.config do repo)'}`,
+    own
+      ? `cores do tailwind do projeto: ${families.length ? families.join(', ') : '(não consegui listar; leia o tailwind.config ou o @theme do repo)'}`
+      : 'cores do tailwind do projeto: o projeto não tem tailwind; use a paleta padrão do Tailwind v4',
   ];
   if (V && V.failed) lines.push(`aviso: o motor não abriu (${V.ui && V.ui.message}); design_render vai falhar até corrigir`);
   for (const w of canvas.warnings || []) lines.push(`aviso: ${w}`);

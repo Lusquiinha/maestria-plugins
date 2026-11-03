@@ -270,17 +270,3 @@ test('close() leaves no chrome or tailwind process', { skip }, async () => {
   assert.ok(!fs.existsSync(path.join(canvasDir, 'png')), 'nothing written into the canvas folder');
 });
 
-test('open() fails readably when the project has no tailwind, leaving no process', { skip }, async () => {
-  const bad = path.join(tmp, 'bad');
-  fs.cpSync(path.join(__dirname, '..', 'bench', 'sac-sidebar'), bad, { recursive: true });
-  const empty = path.join(tmp, 'empty-repo');
-  fs.mkdirSync(empty);
-  const d = JSON.parse(fs.readFileSync(path.join(bad, 'design.json'), 'utf8'));
-  fs.writeFileSync(path.join(bad, 'design.json'), JSON.stringify({ ...d, repo: empty }));
-  await assert.rejects(engineMod.open(bad, { dataDir: path.join(tmp, 'bad-data') }), /o projeto não tem tailwind em node_modules/);
-  await sleep(200);
-  const { execFileSync } = require('node:child_process');
-  let out = '';
-  try { out = execFileSync('pgrep', ['-f', path.join(tmp, 'bad-data')], { encoding: 'utf8' }); } catch { /* none */ }
-  assert.strictEqual(out.trim(), '');
-});

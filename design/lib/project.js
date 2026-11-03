@@ -4,7 +4,39 @@ const path = require('node:path');
 
 const CONFIG_NAMES = ['js', 'cjs', 'mjs', 'ts'].map((e) => `tailwind.config.${e}`);
 const V4_INPUTS = ['src/index.css', 'src/app.css', 'src/styles.css', 'src/globals.css',
-  'app/globals.css', 'app/app.css', 'styles/globals.css', 'src/styles/globals.css'];
+  'app/globals.css', 'app/app.css', 'styles/globals.css', 'src/styles/globals.css', 'src/app/globals.css'];
+const ENTRY_DIRS = ['src', 'app', 'styles', 'assets', 'resources'];
+const ENTRY_SKIP = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.worktrees', 'vendor']);
+const IMPORTS_TAILWIND = /@import\s+["']tailwindcss/;
+
+function importsTailwind(p) {
+  return isFile(p) && IMPORTS_TAILWIND.test(fs.readFileSync(p, 'utf8'));
+}
+
+function findV4Entry(repoDir) {
+  const known = V4_INPUTS.map((rel) => path.join(repoDir, rel)).find(importsTailwind);
+  if (known) return known;
+  const walk = (dir, depth) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+    for (const e of entries) {
+      if (e.isFile() && e.name.endsWith('.css') && importsTailwind(path.join(dir, e.name))) return path.join(dir, e.name);
+    }
+    if (depth === 0) return null;
+    for (const e of entries) {
+      if (e.isDirectory() && !ENTRY_SKIP.has(e.name)) {
+        const found = walk(path.join(dir, e.name), depth - 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  for (const d of ENTRY_DIRS) {
+    const found = walk(path.join(repoDir, d), 3);
+    if (found) return found;
+  }
+  return null;
+}
 
 function isFile(p) {
   try { return fs.statSync(p).isFile(); } catch { return false; }
@@ -23,31 +55,34 @@ function majorOf(range) {
 function detect(repoDir) {
   const bins = path.join(repoDir, 'node_modules', '.bin');
   const bin = path.join(bins, 'tailwindcss');
-  if (!fs.existsSync(bin)) throw new Error('o projeto não tem tailwind em node_modules');
-
   const installed = readJson(path.join(repoDir, 'node_modules', 'tailwindcss', 'package.json'));
   const pkg = readJson(path.join(repoDir, 'package.json')) || {};
   const declared = (pkg.devDependencies && pkg.devDependencies.tailwindcss)
     || (pkg.dependencies && pkg.dependencies.tailwindcss);
-  const version = majorOf(installed && installed.version) || majorOf(declared) || 3;
-
   const configName = CONFIG_NAMES.find((n) => isFile(path.join(repoDir, n)));
   const config = configName ? path.join(repoDir, configName) : null;
+  const version = majorOf(installed && installed.version) || majorOf(declared) || (config ? 3 : 4);
+  const input = version >= 4 ? findV4Entry(repoDir) : null;
 
-  let input = null;
-  if (version >= 4) {
-    const found = V4_INPUTS.find((rel) => {
-      const p = path.join(repoDir, rel);
-      return isFile(p) && /@import\s+["']tailwindcss/.test(fs.readFileSync(p, 'utf8'));
-    });
-    if (found) input = path.join(repoDir, found);
+  if (!fs.existsSync(bin)) {
+    return { tailwind: { version: 4, bin: null, bundled: true, config: null, input }, sass: null };
   }
-
   const sassBin = path.join(bins, 'sass');
   return {
     tailwind: { version: version >= 4 ? 4 : 3, bin, config, input },
     sass: fs.existsSync(sassBin) ? sassBin : null,
   };
+}
+
+function portableEntry(text, entryDir) {
+  return text.split('\n').filter((line) => !/^\s*@plugin\s/.test(line)).map((line) => {
+    const m = /^(\s*@import\s+)(["'])([^"']+)\2(.*)$/.exec(line);
+    if (!m) return line;
+    const spec = m[3];
+    if (spec === 'tailwindcss') return line;
+    if (spec.startsWith('.')) return `${m[1]}${JSON.stringify(path.resolve(entryDir, spec))}${m[4]}`;
+    return null;
+  }).filter((line) => line !== null).join('\n');
 }
 
 // Index of the `}` matching the `{` at `open` (strings and comments skipped), or -1.
@@ -113,10 +148,25 @@ function resolveRelative(fromDir, spec) {
 
 // Best effort: the color families (woot, slate, n…) the project's tailwind config
 // declares, following `...spread` of a relative import one file deep. [] when unknown.
+function themeColors(repoDir) {
+  const entry = findV4Entry(repoDir);
+  if (!entry) return [];
+  const text = fs.readFileSync(entry, 'utf8');
+  const out = new Set();
+  const block = /@theme[^{]*\{/g;
+  let m;
+  while ((m = block.exec(text))) {
+    const close = matchBrace(text, m.index + m[0].length - 1);
+    const body = text.slice(m.index, close < 0 ? text.length : close);
+    for (const c of body.matchAll(/--color-([a-z][a-z0-9-]*?)(?:-\d+)?\s*:/g)) out.add(c[1]);
+  }
+  return [...out];
+}
+
 function colorFamilies(repoDir) {
   try {
     const configName = CONFIG_NAMES.find((n) => isFile(path.join(repoDir, n)));
-    if (!configName) return [];
+    if (!configName) return themeColors(repoDir);
     const text = fs.readFileSync(path.join(repoDir, configName), 'utf8');
     const out = new Set();
     const re = /\bcolors\s*:\s*\{/g;
@@ -214,4 +264,5 @@ function cssVarFiles(repoDir) {
   } catch { return []; }
 }
 
-module.exports = { detect, colorFamilies, cssVarFiles };
+module.exports = {
+  portableEntry, findV4Entry, detect, colorFamilies, cssVarFiles };
