@@ -20,6 +20,7 @@ const KEYS = ['ctrl+c', 'escape', 'ctrl+0', 'ctrl+=', 'ctrl+-'];
 
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const num = (n) => typeof n === 'number' && Number.isFinite(n);
+const copyMenu = (board, k) => [{ action: `copy:${board}:${k}`, label: 'Copiar código' }];
 
 function getter(states) {
   if (!states) return () => null;
@@ -176,7 +177,7 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], node
       const opened = level && level.board === it.name ? findNode(tree, level.k) : null;
       for (const n of opened ? opened.children || [] : tree.roots || []) {
         if (!n.rect) continue;
-        for (const c of onImages(i, n.rect)) hits.push({ board: it.name, k: n.k, ...c, tap: `sel:${it.name}:${n.k}`, dbl: `in:${it.name}:${n.k}` });
+        for (const c of onImages(i, n.rect)) hits.push({ board: it.name, k: n.k, ...c, tap: `sel:${it.name}:${n.k}`, dbl: `in:${it.name}:${n.k}`, menu: copyMenu(it.name, n.k) });
       }
     });
     const sel = ui.sel || null;
@@ -187,7 +188,7 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], node
       // the parent selected, a double click picks the child under the cursor
       for (const ch of n.children || []) {
         if (!ch.rect) continue;
-        for (const c of onImages(i, ch.rect)) hits.push({ board: sel.board, k: ch.k, ...c, tap: `sel:${sel.board}:${n.k}`, dbl: `child:${sel.board}:${ch.k}` });
+        for (const c of onImages(i, ch.rect)) hits.push({ board: sel.board, k: ch.k, ...c, tap: `sel:${sel.board}:${n.k}`, dbl: `child:${sel.board}:${ch.k}`, menu: copyMenu(sel.board, ch.k) });
       }
       // the chrome keeps its size on screen: canvas px / (zoom scale x the
       // app's fit factor, 1 on apps that do not send it)

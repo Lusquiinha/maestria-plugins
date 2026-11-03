@@ -380,6 +380,13 @@ async function onAction(V, act, vals = {}) {
     }
     return render(V);
   }
+  if (verb === 'copy') {
+    const hit = nodeArg(V, arg);
+    if (!hit) return null;
+    V.ui.sel = { board: hit.board, k: hit.k };
+    await copySelection(V);
+    return render(V);
+  }
   if (act === 'key') {
     const key = String(vals.key || '');
     if (key === 'ctrl+c') return copySelection(V);

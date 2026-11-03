@@ -144,6 +144,8 @@ widget Hit = Positioned(
   child: Pressable(
     onTap: event "act" { a: args.h.tap },
     onDoubleTap: event "act" { a: args.h.dbl },
+    menu: args.h.menu,
+    onMenu: event "act" {},
     hoverColor: 0x183B82F6,
     child: SizedBox(width: args.h.width, height: args.h.height),
   ),

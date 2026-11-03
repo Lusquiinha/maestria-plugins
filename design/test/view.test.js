@@ -265,6 +265,7 @@ test('hits at the top level: the top components of every board, on both copies',
   ]);
   assert.strictEqual(d.hits[0].tap, 'sel:a:1');
   assert.strictEqual(d.hits[0].dbl, 'in:a:1');
+  for (const h of d.hits) assert.deepStrictEqual(h.menu, [{ action: `copy:${h.board}:${h.k}`, label: 'Copiar código' }]);
   assert.strictEqual(d.select, true);
   assert.deepStrictEqual(d.panButtons, ['middle']);
   assert.deepStrictEqual(d.keys, ['ctrl+c', 'escape', 'ctrl+0', 'ctrl+=', 'ctrl+-']);

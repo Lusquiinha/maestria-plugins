@@ -454,3 +454,35 @@ test('ctrl+c after the source changed but before the new render shows the messag
     main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
   }
 });
+
+test('right-click copy on a node that is not the selection selects it and copies its code; a stale source is refused', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return { open: true }; };
+  const V = await selCanvas('sel-menu');
+  try {
+    await main.onAction(V, 'sel:x:1');
+    await main.onAction(V, 'copy:x:2');
+    assert.deepStrictEqual(V.ui.sel, { board: 'x', k: 2 });
+    const clip = calls.filter((c) => c.m === 'clipboard.write');
+    assert.strictEqual(clip.length, 1);
+    assert.match(clip[0].p.text, /^@n\d+$/);
+    await main.onAction(V, 'copy:x:1');
+    const first = calls.filter((c) => c.m === 'clipboard.write')[1].p.text;
+    assert.notStrictEqual(first, clip[0].p.text);
+    const n = calls.length;
+    await main.onAction(V, 'copy:x:99');
+    assert.strictEqual(calls.length, n);
+    fs.mkdirSync(path.join(V.dir, 'boards'), { recursive: true });
+    const src = path.join(V.dir, 'boards', 'x.html');
+    fs.writeFileSync(src, '<p>1</p><p>2</p>');
+    const nodesFile = path.join(tmp, main.hashOf(V.dir), 'nodes', 'x.json');
+    fs.utimesSync(nodesFile, 1000, 1000);
+    fs.utimesSync(src, 2000, 2000);
+    await main.onAction(V, 'copy:x:2');
+    assert.strictEqual(calls.filter((c) => c.m === 'clipboard.write').length, 2, 'stale: nothing copied');
+    assert.ok(calls.some((c) => c.m === 'window.showBanner' && c.p.text === 'a prancheta mudou: espere a imagem nova'));
+  } finally {
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
