@@ -206,7 +206,7 @@ test('manifest: id, main, activation events, commands', () => {
   assert.strictEqual(m.name, 'Design');
   assert.strictEqual(m.maestria, 1);
   assert.deepStrictEqual(m.main, ['node', 'main.js']);
-  assert.deepStrictEqual(m.activationEvents, ['onCommand:abrir', 'onTool:design_open', 'onTool:design_board', 'onTool:design_render', 'onTool:design_focus', 'onTool:design_list', 'onTool:design_ref', 'onHook:PreToolUse']);
+  assert.deepStrictEqual(m.activationEvents, ['onCommand:abrir', 'onTool:design_open', 'onTool:design_board', 'onTool:design_render', 'onTool:design_focus', 'onTool:design_list', 'onTool:design_ref', 'onTool:design_comments', 'onTool:design_comment_reply', 'onHook:PreToolUse']);
   assert.deepStrictEqual(m.permissions, ['sessions.create', 'hooks']);
   assert.deepStrictEqual(m.contributes.commands, [{ id: 'abrir', title: 'Design: abrir canvas de telas…' }]);
   assert.strictEqual(m.contributes.sidebar, true);
