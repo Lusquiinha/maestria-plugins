@@ -613,6 +613,28 @@ test('comment on a node whose source changed before the new render: the message,
   }
 });
 
+test('comment with a corrupt comments.json: its message before the dialog (no typed text lost); the pin menu too', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return m === 'window.input' ? 'x' : { open: true }; };
+  const V = await selCanvas('comment-corrupt');
+  try {
+    withSource(V);
+    fs.writeFileSync(path.join(V.dir, 'comments.json'), '{');
+    await main.onAction(V, 'comment:x:1');
+    assert.ok(!calls.some((c) => c.m === 'window.input'), 'no dialog');
+    assert.ok(calls.some((c) => c.m === 'window.showBanner' && /comments\.json ilegível/.test(c.p.text)));
+    const n = calls.length;
+    await main.onAction(V, 'reply:1');
+    assert.ok(!calls.slice(n).some((c) => c.m === 'window.input'));
+    assert.ok(calls.slice(n).some((c) => c.m === 'window.showBanner' && /comments\.json ilegível/.test(c.p.text)), 'the pin menu shows it too');
+    assert.strictEqual(fs.readFileSync(path.join(V.dir, 'comments.json'), 'utf8'), '{');
+  } finally {
+    answer = async () => ({ open: true });
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
 test('pin menu: reply, edit (current text as value) and delete call the store; empty or cancel do nothing', async () => {
   const calls = [];
   let reply = null;
@@ -693,6 +715,49 @@ test('zoom redraws when pins are on screen (they keep their size)', async () => 
     await main.onAction(V, 'zoom', { scale: 2 });
     assert.ok(Math.abs(lastData(calls).pins[0].size - 12) < 1e-6, `pin size ${lastData(calls).pins[0].size}`);
   } finally {
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
+test('pins are cached: zoom ticks reuse them; a comments.json change or a new render resolves again', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return { open: true }; };
+  const V = await selCanvas('pin-cache');
+  const refsMod = require('../lib/refs');
+  const realOpen = commentsMod.open;
+  const realRefs = refsMod.open;
+  let lists = 0;
+  let refOpens = 0;
+  commentsMod.open = (dir) => { const C = realOpen(dir); const list = C.list; C.list = (...a) => { lists += 1; return list(...a); }; return C; };
+  refsMod.open = (...a) => { refOpens += 1; return realRefs(...a); };
+  try {
+    fs.mkdirSync(V.dir, { recursive: true });
+    realOpen(V.dir).add({ board: 'x', code: '@n1', text: 'a', rect: { x: 0, y: 0, w: 10, h: 10 } });
+    await main.render(V);
+    assert.strictEqual(lastData(calls).pins.length, 2);
+    lists = 0; refOpens = 0;
+    const n = calls.length;
+    await main.onAction(V, 'zoom', { scale: 2 });
+    await main.onAction(V, 'zoom', { scale: 3 });
+    assert.strictEqual(calls.length, n + 2, 'both zoom ticks redraw');
+    assert.deepStrictEqual([lists, refOpens], [0, 0], 'no store or refs read on a zoom tick');
+    assert.strictEqual(lastData(calls).pins.length, 2);
+    // a new comment written elsewhere (comments.json changes) shows up
+    const file = path.join(V.dir, 'comments.json');
+    realOpen(V.dir).add({ board: 'x', code: '@n2', text: 'b', rect: { x: 0, y: 0, w: 10, h: 10 } });
+    fs.utimesSync(file, new Date(), new Date(Date.now() + 5000));
+    await main.render(V);
+    assert.strictEqual(lastData(calls).pins.length, 4);
+    // a new render of the board resolves again
+    lists = 0;
+    V.engine.emit('board', 'x', { light: 'l.png', dark: 'd.png', width: 400, height: 200, rev: 2 });
+    await sleep(10);
+    assert.ok(lists > 0, 'the board event drops the cache');
+  } finally {
+    commentsMod.open = realOpen;
+    refsMod.open = realRefs;
+    answer = async () => ({ open: true });
     await main.closeView(V.viewId);
     main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
   }
