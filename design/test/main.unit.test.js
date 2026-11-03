@@ -513,6 +513,20 @@ test('rename: the label asks for a name (current title as value) and writes only
     reply = '  Avisos  ';
     await main.onAction(V, 'rename:notificacoes');
     assert.strictEqual(title(), 'Avisos');
+    reply = 'x'.repeat(121);
+    await main.onAction(V, 'rename:notificacoes');
+    assert.strictEqual(title(), 'Avisos', 'over 120 chars: no write');
+    // a concurrent edit while the dialog is open survives
+    answer = async (m) => {
+      if (m !== 'window.input') return { open: true };
+      const c = canvasMod.read(V.dir);
+      canvasMod.write(V.dir, { ...c, boards: { ...c.boards, outra: { x: 5, y: 6, w: 300 } } });
+      return 'Novo';
+    };
+    await main.onAction(V, 'rename:notificacoes');
+    const after = canvasMod.read(V.dir);
+    assert.strictEqual(after.boards.notificacoes.title, 'Novo');
+    assert.deepStrictEqual(after.boards.outra, { x: 5, y: 6, w: 300 });
     await main.onAction(V, 'rename:nope'); // unknown board: nothing
   } finally {
     await main.closeView(V.viewId);

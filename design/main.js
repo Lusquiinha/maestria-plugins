@@ -389,7 +389,12 @@ async function onAction(V, act, vals = {}) {
     const name = await mx.request('window.input', { title: 'design: renomear tela', placeholder: 'Nome da tela', value: current });
     const next = typeof name === 'string' ? name.trim() : '';
     if (!next || next === current) return null;
-    canvasMod.write(V.dir, { ...canvas, boards: { ...canvas.boards, [arg]: { ...b, title: next } } });
+    if (next.length > 120) return banner('o nome da tela passa de 120 caracteres');
+    // the dialog may stay open a while: re-read so a concurrent edit survives
+    let fresh;
+    try { fresh = canvasMod.read(V.dir); } catch (e) { return banner(errText(e)); }
+    if (!fresh.boards[arg]) return null;
+    canvasMod.write(V.dir, { ...fresh, boards: { ...fresh.boards, [arg]: { ...fresh.boards[arg], title: next } } });
     return null; // the engine watches canvas.json and re-renders
   }
   if (verb === 'copy') {
