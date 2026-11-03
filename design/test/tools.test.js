@@ -431,3 +431,14 @@ test('design_comment_reply rejects empty text; corrupt comments.json is not over
   assert.strictEqual(r2.isError, true);
   assert.strictEqual(fs.readFileSync(path.join(dir, 'comments.json'), 'utf8'), '{oops');
 });
+
+test('design_comment_reply redraws the open canvas of that folder (its pin changes)', async () => {
+  const { host, dir } = await refCanvas();
+  const changed = [];
+  host.commentsChanged = (d) => changed.push(d);
+  const id = commentsMod.open(dir).add({ board: 'a', code: '@n1', text: 'x' });
+  await tools.handle('design_comment_reply', { id, text: 'feito', done: true }, ctxOf(host));
+  assert.deepStrictEqual(changed.map((d) => path.resolve(d)), [path.resolve(dir)]);
+  await tools.handle('design_comment_reply', { id: 999, text: 'x', done: true }, ctxOf(host));
+  assert.strictEqual(changed.length, 1, 'a failed reply redraws nothing');
+});

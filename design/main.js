@@ -26,6 +26,7 @@ const scanner = require('./lib/scanner');
 const sweep = require('./lib/sweep');
 const refs = require('./lib/refs');
 const sidebar = require('./lib/sidebar');
+const commentsMod = require('./lib/comments');
 
 const PLUGIN_ID = 'maestria.design';
 const UI_FILE = path.join(__dirname, 'ui', 'canvas.rfwtxt');
@@ -113,12 +114,41 @@ function nodesOf(V, name) {
   return tree;
 }
 
+// The comments of the canvas with the rect of each element: where its code
+// still points now (kept in the store as the last known spot), else the stored one.
+function pinsOf(V) {
+  let C;
+  let list;
+  try {
+    C = commentsMod.open(V.dir);
+    list = C.list();
+  } catch (e) { mx.log('comments.json:', errText(e)); return []; }
+  if (!list.length) return [];
+  const R = refs.open(dataDirOf(V.dir), V.dir);
+  return list.map((c) => {
+    let rect = c.rect || null;
+    try {
+      const e = R.current(c.code);
+      const tree = e && e.board === c.board ? nodesOf(V, c.board) : null;
+      const node = tree && refs.locate(tree.roots, e);
+      if (node && node.rect) {
+        const r = node.rect;
+        if (!rect || rect.x !== r.x || rect.y !== r.y || rect.w !== r.w || rect.h !== r.h) C.place(c.id, r);
+        rect = r;
+      }
+    } catch (e) { mx.log(`comentário ${c.id}:`, errText(e)); }
+    return { ...c, rect };
+  });
+}
+
 function data(V) {
   const nodes = new Map();
   if (state.caps.zoomPan && state.caps.keyListener && V.canvas) {
     for (const name of V.canvas.order || []) { const t = nodesOf(V, name); if (t) nodes.set(name, t); }
   }
-  const d = view.build({ canvas: V.canvas, states: V.states, ui: V.ui, caps: state.caps, hash: V.hash, scans: scans.active(V.dir), nodes });
+  const pins = pinsOf(V);
+  V.hasPins = pins.length > 0;
+  const d = view.build({ canvas: V.canvas, states: V.states, ui: V.ui, caps: state.caps, hash: V.hash, scans: scans.active(V.dir), nodes, pins });
   return view.wire(d);
 }
 
@@ -326,18 +356,22 @@ function clearSelection(V) {
   return render(V);
 }
 
-// Ctrl+C: the short code of the selected node to the clipboard.
-async function copySelection(V) {
+// The short code of the selected node (null when nothing is selected); throws
+// when its source changed after the image (refs.checkFresh).
+function selectionCode(V) {
   const sel = V.ui.sel;
   const tree = sel && nodesOf(V, sel.board);
   const node = tree && view.findNode(tree, sel.k);
-  if (!node) return;
-  let code;
-  try {
-    code = refs.open(dataDirOf(V.dir), V.dir).codeFor(sel.board, { ...node, via: refs.viaOf(tree.roots, node.k) });
-  } catch (e) {
-    return banner(errText(e));
-  }
+  if (!node) return null;
+  return { node, code: refs.open(dataDirOf(V.dir), V.dir).codeFor(sel.board, { ...node, via: refs.viaOf(tree.roots, node.k) }) };
+}
+
+// Ctrl+C: the short code of the selected node to the clipboard.
+async function copySelection(V) {
+  let got;
+  try { got = selectionCode(V); } catch (e) { return banner(errText(e)); }
+  if (!got) return;
+  const { code } = got;
   await mx.request('clipboard.write', { text: code });
   banner(`Código ${code} copiado`);
 }
@@ -358,7 +392,53 @@ function zoomOf(V, vals) {
   return changed;
 }
 function rescale(V, vals) {
-  return zoomOf(V, vals) && V.ui.sel ? render(V) : null;
+  return zoomOf(V, vals) && (V.ui.sel || V.hasPins) ? render(V) : null;
+}
+
+const COMMENT_INPUT = { placeholder: 'Escreva o comentário' };
+const typed = (v) => (typeof v === 'string' ? v.trim() : '');
+
+// "Comentar…" on a node: selects it, takes its code (refused while its source
+// is newer than the image) and stores the text with the node's rect.
+async function commentOn(V, arg) {
+  const hit = nodeArg(V, arg);
+  if (!hit) return null;
+  V.ui.sel = { board: hit.board, k: hit.k };
+  let got;
+  try { got = selectionCode(V); } catch (e) { await banner(errText(e)); return render(V); }
+  render(V);
+  const text = typed(await mx.request('window.input', { title: 'Comentar', ...COMMENT_INPUT }));
+  if (!text) return null;
+  commentsMod.open(V.dir).add({ board: hit.board, code: got.code, text, rect: got.node.rect });
+  return render(V);
+}
+
+// The pin menu: "reply:<id>", "edit:<id>", "delete:<id>".
+async function onPin(V, verb, id) {
+  const C = commentsMod.open(V.dir);
+  const c = C.list().find((x) => x.id === Number(id));
+  if (!c) return banner(`Comentário ${id} não existe`);
+  // the store re-reads the file on each write: a reply Claude made while the
+  // dialog was open survives; a comment deleted meanwhile is a message
+  try {
+    if (verb === 'delete') C.remove(c.id);
+    else if (verb === 'reply') {
+      const text = typed(await mx.request('window.input', { title: 'Responder', ...COMMENT_INPUT }));
+      if (!text) return null;
+      C.reply(c.id, { author: 'arthur', text });
+    } else {
+      const text = typed(await mx.request('window.input', { title: 'Editar comentário', ...COMMENT_INPUT, value: c.text }));
+      if (!text || text === c.text) return null;
+      C.edit(c.id, text);
+    }
+  } catch (e) { return banner(errText(e)); }
+  return render(V);
+}
+
+// Claude answered a comment (design_comment_reply): its pin changes.
+function commentsChanged(dir) {
+  const V = viewOf(dir);
+  return V ? render(V) : null;
 }
 
 const KEY_ZOOM = { 'ctrl+0': 'fit', 'ctrl+=': 'in', 'ctrl+-': 'out' };
@@ -414,6 +494,8 @@ async function onAction(V, act, vals = {}) {
     await copySelection(V);
     return render(V);
   }
+  if (verb === 'comment') return commentOn(V, arg);
+  if (['reply', 'edit', 'delete'].includes(verb) && arg) return onPin(V, verb, arg);
   if (act === 'key') {
     const key = String(vals.key || '');
     if (key === 'ctrl+c') return copySelection(V);
@@ -544,7 +626,7 @@ mx.onRequest('command.invoke', ({ command: id, context }) => {
 
 // What the MCP tools use from here (so tests of lib/tools can fake it).
 const dataDirOf = (dir) => path.join(state.dataDir, hashOf(dir)); // the engine's data dir of a canvas
-const host = { request: mx.request, openCanvas, viewOf, focusBoard, lastFor, dataDirOf, remember };
+const host = { request: mx.request, openCanvas, viewOf, focusBoard, lastFor, dataDirOf, remember, commentsChanged };
 
 mx.onRequest('tool.call', ({ tool, args, tabId, cwd }) => tools.handle(tool, args, { tabId, cwd, host }));
 

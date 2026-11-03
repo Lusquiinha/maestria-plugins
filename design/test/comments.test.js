@@ -66,3 +66,16 @@ test('unknown id throws "Comentário <id> não existe"', () => {
   assert.throws(() => C.edit(9, 'x'), /Comentário 9 não existe/);
   assert.throws(() => C.remove(9), /Comentário 9 não existe/);
 });
+
+test('add keeps an optional rect; place moves it (the last known spot of the element)', () => {
+  const dir = fresh();
+  const C = comments.open(dir);
+  const a = C.add({ board: 'a', code: '@n1', text: 'x', rect: { x: 1, y: 2, w: 3, h: 4 } });
+  const b = C.add({ board: 'a', code: '@n2', text: 'y' });
+  assert.deepStrictEqual(C.list()[0].rect, { x: 1, y: 2, w: 3, h: 4 });
+  assert.ok(!('rect' in C.list()[1]));
+  C.place(a, { x: 5, y: 6, w: 7, h: 8 });
+  C.place(b, { x: 0, y: 0, w: 1, h: 1 });
+  assert.deepStrictEqual(C.list().map((c) => c.rect), [{ x: 5, y: 6, w: 7, h: 8 }, { x: 0, y: 0, w: 1, h: 1 }]);
+  assert.throws(() => C.place(99, { x: 0, y: 0, w: 1, h: 1 }), /99 não existe/);
+});

@@ -364,6 +364,7 @@ async function commentReply(args, ctx) {
   if (!String(args.text == null ? '' : args.text).trim()) return fail('texto da resposta vazio');
   const dir = resolveFrom(args, ctx);
   commentsMod.open(dir).reply(args.id, { author: 'claude', text: String(args.text), done: args.done === true });
+  if (ctx.host.commentsChanged) ctx.host.commentsChanged(dir); // the pin turns green / shows the reply
   return text(`resposta registrada no comentário ${args.id}${args.done === true ? ' (feito)' : ''}`);
 }
 

@@ -548,3 +548,169 @@ test('rename: the label asks for a name (current title as value) and writes only
     main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
   }
 });
+
+// ---- comments ---------------------------------------------------------------
+
+const commentsMod = require('../lib/comments');
+
+// selCanvas with a real source for node 1 (path [1] = the second <p>), the node map newer than it
+function withSource(V) {
+  fs.mkdirSync(path.join(V.dir, 'boards'), { recursive: true });
+  const src = path.join(V.dir, 'boards', 'x.html');
+  fs.writeFileSync(src, '<p>0</p><p>1</p><p>2</p>');
+  fs.utimesSync(src, 1000, 1000);
+  fs.utimesSync(path.join(tmp, main.hashOf(V.dir), 'nodes', 'x.json'), 2000, 2000);
+  return src;
+}
+
+test('comment: right-click "Comentar…" selects the node, asks for the text and stores it with code and rect', async () => {
+  const calls = [];
+  let reply = '  mais escuro  ';
+  answer = async (m, p) => { calls.push({ m, p }); return m === 'window.input' ? reply : { open: true }; };
+  const V = await selCanvas('comment');
+  try {
+    withSource(V);
+    await main.onAction(V, 'comment:x:1');
+    assert.deepStrictEqual(V.ui.sel, { board: 'x', k: 1 });
+    const inp = calls.find((c) => c.m === 'window.input');
+    assert.deepStrictEqual([inp.p.title, inp.p.placeholder], ['Comentar', 'Escreva o comentário']);
+    const [c] = commentsMod.open(V.dir).list();
+    assert.strictEqual(c.board, 'x');
+    assert.match(c.code, /^@n\d+$/);
+    assert.strictEqual(c.text, 'mais escuro');
+    assert.deepStrictEqual(c.rect, { x: 1, y: 1, w: 50, h: 20 });
+    const d = lastData(calls);
+    assert.strictEqual(d.pins.length, 2, 'light and dark');
+    assert.strictEqual(d.pins[0].label, String(c.id));
+    for (reply of ['', '   ', null]) {
+      await main.onAction(V, 'comment:x:1');
+      assert.strictEqual(commentsMod.open(V.dir).list().length, 1, `no comment for ${JSON.stringify(reply)}`);
+    }
+    await main.onAction(V, 'comment:x:99'); // no such node
+    assert.strictEqual(commentsMod.open(V.dir).list().length, 1);
+  } finally {
+    answer = async () => ({ open: true });
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
+test('comment on a node whose source changed before the new render: the message, no dialog, no comment', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return m === 'window.input' ? 'x' : { open: true }; };
+  const V = await selCanvas('comment-stale');
+  try {
+    const src = withSource(V);
+    fs.utimesSync(src, 3000, 3000);
+    await main.onAction(V, 'comment:x:1');
+    assert.ok(!calls.some((c) => c.m === 'window.input'));
+    assert.ok(calls.some((c) => c.m === 'window.showBanner' && c.p.text === 'A tela mudou: espere a imagem nova'));
+    assert.deepStrictEqual(commentsMod.open(V.dir).list(), []);
+  } finally {
+    answer = async () => ({ open: true });
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
+test('pin menu: reply, edit (current text as value) and delete call the store; empty or cancel do nothing', async () => {
+  const calls = [];
+  let reply = null;
+  answer = async (m, p) => { calls.push({ m, p }); return m === 'window.input' ? reply : { open: true }; };
+  const V = await selCanvas('pin-menu');
+  try {
+    fs.mkdirSync(V.dir, { recursive: true });
+    const C = commentsMod.open(V.dir);
+    const id = C.add({ board: 'x', code: '@n1', text: 'azul', rect: { x: 0, y: 0, w: 10, h: 10 } });
+    const get = () => C.list().find((c) => c.id === id);
+    for (reply of ['', '  ', null]) {
+      await main.onAction(V, `reply:${id}`);
+      await main.onAction(V, `edit:${id}`);
+    }
+    assert.deepStrictEqual([get().text, get().replies], ['azul', []]);
+    const inputs = calls.filter((c) => c.m === 'window.input').map((c) => c.p);
+    assert.deepStrictEqual([inputs[0].title, inputs[0].placeholder], ['Responder', 'Escreva o comentário']);
+    assert.deepStrictEqual([inputs[1].title, inputs[1].placeholder, inputs[1].value], ['Editar comentário', 'Escreva o comentário', 'azul']);
+    C.reply(id, { author: 'claude', text: 'pronto', done: true });
+    reply = ' não ficou bom ';
+    await main.onAction(V, `reply:${id}`);
+    assert.deepStrictEqual(get().replies.map((r) => [r.author, r.text]), [['claude', 'pronto'], ['arthur', 'não ficou bom']]);
+    assert.strictEqual(get().status, 'aberto', 'an answer from Arthur reopens it');
+    reply = 'verde';
+    await main.onAction(V, `edit:${id}`);
+    assert.strictEqual(get().text, 'verde');
+    assert.match(lastData(calls).pins[0].tooltip, /^#\d+ · verde\nClaude: pronto\nArthur: não ficou bom$/);
+    await main.onAction(V, `delete:${id}`);
+    assert.deepStrictEqual(C.list(), []);
+    assert.deepStrictEqual(lastData(calls).pins, []);
+    const n = calls.filter((c) => c.m === 'window.input').length;
+    await main.onAction(V, `delete:${id}`); // gone: a message, nothing else
+    await main.onAction(V, `reply:${id}`);
+    assert.strictEqual(calls.filter((c) => c.m === 'window.input').length, n);
+    assert.ok(calls.some((c) => c.m === 'window.showBanner' && c.p.text === `Comentário ${id} não existe`));
+  } finally {
+    answer = async () => ({ open: true });
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
+test('pins follow the element while its code resolves and stay at the last known rect once stale', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return m === 'window.input' ? 'oi' : { open: true }; };
+  const V = await selCanvas('pin-rect');
+  try {
+    const src = withSource(V);
+    await main.onAction(V, 'comment:x:1');
+    const nodesFile = path.join(tmp, main.hashOf(V.dir), 'nodes', 'x.json');
+    const moved = (x) => ({ k: 1, rect: { x, y: 1, w: 50, h: 20 }, kind: 'element', name: 'n1', file: 'boards/x.html', path: [1], call: null, componentFile: null, children: [] });
+    fs.writeFileSync(nodesFile, JSON.stringify({ roots: [moved(100)] }));
+    V.nodes.delete('x');
+    await main.render(V);
+    const pinLeft = () => lastData(calls).pins[0].left;
+    const left100 = pinLeft();
+    assert.deepStrictEqual(commentsMod.open(V.dir).list()[0].rect, { x: 100, y: 1, w: 50, h: 20 }, 'the last known rect is kept');
+    fs.writeFileSync(src, '<b></b><p>0</p><p>1</p><p>2</p>'); // stale now
+    fs.writeFileSync(nodesFile, JSON.stringify({ roots: [moved(300)] }));
+    V.nodes.delete('x');
+    await main.render(V);
+    assert.strictEqual(pinLeft(), left100);
+  } finally {
+    answer = async () => ({ open: true });
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
+test('zoom redraws when pins are on screen (they keep their size)', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return { open: true }; };
+  const V = await selCanvas('pin-zoom');
+  try {
+    fs.mkdirSync(V.dir, { recursive: true });
+    commentsMod.open(V.dir).add({ board: 'x', code: '@n1', text: 'a', rect: { x: 0, y: 0, w: 10, h: 10 } });
+    await main.render(V);
+    await main.onAction(V, 'zoom', { scale: 2 });
+    assert.strictEqual(lastData(calls).pins[0].size, 12 - 1e-9);
+  } finally {
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
+test('a corrupt comments.json draws no pins and does not break the canvas', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return { open: true }; };
+  const V = await selCanvas('pin-corrupt');
+  try {
+    fs.mkdirSync(V.dir, { recursive: true });
+    fs.writeFileSync(path.join(V.dir, 'comments.json'), '{');
+    await main.render(V);
+    const d = lastData(calls);
+    assert.deepStrictEqual(d.pins, []);
+    assert.strictEqual(d.boards.length, 1);
+  } finally {
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});

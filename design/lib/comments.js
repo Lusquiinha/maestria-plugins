@@ -36,10 +36,14 @@ function open(canvasDir) {
       const { items } = load();
       return status === 'todos' ? items : items.filter((c) => c.status === status);
     },
-    add({ board, code, text }) {
+    // rect: the element's box in image px when commented (where its pin stays
+    // once the code goes stale); place() keeps it current.
+    add({ board, code, text, rect }) {
       const d = load();
       const id = Math.max(d.next, ...d.items.map((c) => c.id + 1));
-      d.items.push({ id, board, code, text, status: 'aberto', created: now(), replies: [] });
+      const c = { id, board, code, text, status: 'aberto', created: now(), replies: [] };
+      if (rect) c.rect = { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+      d.items.push(c);
       d.next = id + 1;
       save(d);
       return id;
@@ -56,6 +60,11 @@ function open(canvasDir) {
     edit(id, text) {
       const d = load();
       find(d, id).text = text;
+      save(d);
+    },
+    place(id, rect) {
+      const d = load();
+      find(d, id).rect = { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
       save(d);
     },
     remove(id) {

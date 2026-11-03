@@ -285,3 +285,14 @@ test('codeFor_refuses_when_source_newer_than_nodes', () => {
   nodesAt(4000);
   assert.match(r.codeFor('a', viaChanged), /^@n\d+$/, 'the new render is in');
 });
+
+test('current: the entry of a code while its source still matches; null when stale or unknown', () => {
+  const { dir, data } = canvas({ 'boards/a.html': '<main><p>um</p><p>dois</p></main>' });
+  const r = refs.open(data, dir);
+  const code = r.codeFor('a', el('boards/a.html', [0, 1]));
+  const e = r.current(code);
+  assert.deepStrictEqual([e.board, e.file, e.path], ['a', 'boards/a.html', [0, 1]]);
+  assert.strictEqual(r.current('@n424242'), null);
+  fs.writeFileSync(path.join(dir, 'boards/a.html'), '<main><x-a></x-a><p>um</p><p>dois</p></main>');
+  assert.strictEqual(r.current(code), null);
+});
