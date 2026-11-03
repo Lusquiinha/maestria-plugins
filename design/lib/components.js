@@ -22,7 +22,7 @@ function load(dir) {
   for (const f of files.sort()) {
     if (!f.endsWith('.html')) continue;
     const name = f.slice(0, -5);
-    if (!NAME_RE.test(name)) { map.errors.push(`nome de componente inválido: ${f}`); continue; }
+    if (!NAME_RE.test(name)) { map.errors.push(`Nome de componente inválido: ${f}`); continue; }
     try { map.set(name, fs.readFileSync(path.join(dir, 'components', f), 'utf8')); }
     catch (e) { map.errors.push(`${f}: ${e.message}`); }
   }

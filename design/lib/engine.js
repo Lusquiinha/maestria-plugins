@@ -103,7 +103,7 @@ class Engine extends EventEmitter {
   _applyCanvas(c, emit) {
     this.comps = components.load(this.dir);
     const orphans = this.boardNames().filter((n) => !Object.prototype.hasOwnProperty.call(c.boards, n))
-      .map((n) => `board "${n}" sem posição no canvas.json`);
+      .map((n) => `Tela "${n}" sem posição no canvas.json`);
     this.canvas = { ...c, warnings: [...c.warnings, ...this.comps.errors, ...orphans] };
     if (emit) this.emit('canvas', this.canvas);
   }
@@ -207,7 +207,7 @@ class Engine extends EventEmitter {
     const comps = components.load(this.dir);
     this.comps = comps;
     if (this.canvas) {
-      const w = this.canvas.warnings.filter((x) => !x.startsWith('nome de componente inválido') && !/^[^ ]+\.html: /.test(x));
+      const w = this.canvas.warnings.filter((x) => !x.startsWith('Nome de componente inválido') && !/^[^ ]+\.html: /.test(x));
       this.canvas = { ...this.canvas, warnings: [...w, ...comps.errors] };
       this.emit('canvas', this.canvas);
     }

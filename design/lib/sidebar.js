@@ -10,12 +10,19 @@ const canvasMod = require('./canvas');
 const TEXT = 'Para criar um design novo, peça ao Claude numa sessão: "cria uma tela de…"';
 const EMPTY_BANNER = 'Nenhum canvas ainda. Peça ao Claude numa sessão: "cria uma tela de…"';
 
-// The repo folder of design.json, else the company folder (<company>/design/<name>).
-function projectOf(dir) {
+// The canvas repo (design.json `repo`, absolute), or null.
+function repoOf(dir) {
   try {
     const repo = JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8')).repo;
-    if (typeof repo === 'string' && repo) return path.basename(path.resolve(dir, repo));
+    if (typeof repo === 'string' && repo) return path.resolve(dir, repo);
   } catch { /* no design.json */ }
+  return null;
+}
+
+// The repo folder of design.json, else the company folder (<company>/design/<name>).
+function projectOf(dir) {
+  const repo = repoOf(dir);
+  if (repo) return path.basename(repo);
   const parent = path.dirname(dir);
   return path.basename(parent) === 'design' ? path.basename(path.dirname(parent)) : '';
 }
@@ -48,4 +55,4 @@ function pickItems(list, { home = os.homedir() } = {}) {
 
 const viewTitle = (title) => (title ? `Design · ${title}` : 'Design');
 
-module.exports = { TEXT, EMPTY_BANNER, projectOf, canvases, data, blocks, pickItems, viewTitle };
+module.exports = { TEXT, EMPTY_BANNER, repoOf, projectOf, canvases, data, blocks, pickItems, viewTitle };

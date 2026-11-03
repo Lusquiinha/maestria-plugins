@@ -452,15 +452,6 @@ async function onAction(V, act, vals = {}) {
 
 const promptFor = (dir) => `Call design_open with canvas="${dir}" and wait for my request.`;
 
-/** O repo do canvas (design.json), pra abrir o claude nele. */
-function repoOf(dir) {
-  try {
-    const repo = JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8')).repo;
-    if (typeof repo === 'string' && repo) return path.resolve(dir, repo);
-  } catch { /* no design.json */ }
-  return null;
-}
-
 /** As sessões do claude vivas (uma hibernada serve), por id. */
 async function liveClaudeTabs() {
   let list;
@@ -480,7 +471,7 @@ async function openWithSession(dir, context) {
   const linked = Object.keys(state.last.byTab).filter((t) => state.last.byTab[t] === dir).reverse();
   const tabId = linked.find((t) => live.has(t));
   if (tabId) return openCanvas(dir, { tabId, cwd });
-  const repo = repoOf(dir) || cwd || path.dirname(dir);
+  const repo = sidebar.repoOf(dir) || cwd || path.dirname(dir);
   const opened = await mx.request('session.openClaude', { cwd: repo, prompt: promptFor(dir) });
   return openCanvas(dir, { tabId: opened && opened.tabId, cwd: repo });
 }
