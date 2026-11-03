@@ -6,7 +6,10 @@
 // of the opening tags on its path (see fingerprint); resolve() refuses (stale)
 // when the path no longer resolves or those tags changed. Nothing is written
 // into the sources.
-// Persisted per canvas in <dataDir>/refs.json.
+// Persisted per canvas in <dataDir>/refs.json; the numbers come from one
+// counter for the whole plugin (<dataDir>/../refs-counter.json, dataDir being
+// <plugin data>/<canvas hash>), so a code pasted into another canvas's chat is
+// unknown there instead of naming something else.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -113,13 +116,45 @@ function usedIn(canvasDir, name) {
   });
 }
 
+function writeAtomic(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, text);
+  fs.renameSync(tmp, file);
+}
+
 const parseCode = (code) => { const m = /^@?n?(\d+)$/.exec(String(code || '').trim()); return m ? Number(m[1]) : null; };
 
 class Refs {
   constructor(dataDir, canvasDir) {
     if (!dataDir || !canvasDir) throw new Error('refs.open precisa de dataDir e canvasDir');
+    this.dataDir = dataDir;
     this.file = path.join(dataDir, 'refs.json');
+    this.counterFile = path.join(path.dirname(path.resolve(dataDir)), 'refs-counter.json');
     this.canvasDir = canvasDir;
+  }
+
+  // The next free number across canvases (never below this canvas's own `next`,
+  // for maps written before the shared counter).
+  take(localNext) {
+    let next = 1;
+    try { const j = JSON.parse(fs.readFileSync(this.counterFile, 'utf8')); if (Number.isInteger(j.next) && j.next > 0) next = j.next; } catch { /* first code */ }
+    const k = Math.max(next, localNext);
+    writeAtomic(this.counterFile, JSON.stringify({ next: k + 1 }));
+    return k;
+  }
+
+  // Throws when a file the node comes from was saved after the board's last
+  // node map: the boxes on screen may not be that element any more.
+  checkFresh(board, files, canvasDir) {
+    let mapAt;
+    try { mapAt = fs.statSync(path.join(this.dataDir, 'nodes', `${board}.json`)).mtimeMs; } catch { return; }
+    for (const f of files) {
+      if (!FILE_RE.test(f)) continue;
+      let at;
+      try { at = fs.statSync(path.join(canvasDir, f)).mtimeMs; } catch { continue; }
+      if (at > mapAt) throw new Error('a prancheta mudou: espere a imagem nova');
+    }
   }
 
   load() {
@@ -130,12 +165,7 @@ class Refs {
     return { next: 1, keys: {}, codes: {} };
   }
 
-  save(j) {
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(j));
-    fs.renameSync(tmp, this.file);
-  }
+  save(j) { writeAtomic(this.file, JSON.stringify(j)); }
 
   // node: a nodes-tree node ({ kind, name, file, path, componentFile }) plus
   // `via` (viaOf) when it sits inside component calls. Selecting again
@@ -145,10 +175,11 @@ class Refs {
       throw new Error(`codeFor: ${node.file} ${JSON.stringify(node.path)} está num componente e veio sem via (use refs.viaOf)`);
     }
     const via = (node.via || []).map((v) => ({ file: v.file, path: [...v.path], componentFile: v.componentFile || null }));
+    this.checkFresh(board, [node.file, ...via.map((v) => v.file)], canvasDir);
     const key = JSON.stringify([board, node.file, node.path, via.map((v) => [v.file, v.path])]);
     const j = this.load();
     let k = j.keys[key];
-    if (k == null) { k = j.next++; j.keys[key] = k; }
+    if (k == null) { k = this.take(j.next); j.next = k + 1; j.keys[key] = k; }
     const fp = (file, p) => { const o = at(canvasDir, file, p); return o ? o.fp : null; };
     j.codes[k] = {
       board, file: node.file, path: [...node.path], kind: node.kind, name: node.name,

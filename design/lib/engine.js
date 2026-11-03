@@ -371,7 +371,7 @@ class Engine extends EventEmitter {
         const light = await renderMod.renderPage(chrome, { ...base, dark: null, out: temps[0], ...small(2), collect: nodes.collectScript });
         if (stale()) return { stale: true, temps, nodesTmp };
         const map = Array.isArray(light.collected) && sources
-          ? { rev, width: light.width, height: light.height, ...nodes.tree(light.collected, sources) } : null;
+          ? { rev, width: light.width, height: light.height, ...nodes.tree(light.collected, sources, { w: light.width, h: light.height }) } : null;
         if (map) writeAtomic(nodesTmp, JSON.stringify(map));
         else this.log(`board ${name}: sem mapa de nós`);
         const dark = await renderMod.renderPage(chrome, { ...base, dark: this.design.darkMode, out: temps[1], ...small(3) });

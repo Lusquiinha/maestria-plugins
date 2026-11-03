@@ -68,6 +68,22 @@ test('a component call is boxed around its top-level elements; nested calls nest
   assert.deepStrictEqual(outer.children[0].children.map((c) => c.k), [4]);
 });
 
+test('roots_skip_full_board_wrapper', () => {
+  const sources = new Map([
+    el(1, [0]),
+    [2, { file: 'boards/b.html', path: [0, 0], tag: 'x-sidebar', kind: 'component', name: 'x-sidebar', componentFile: 'components/Sidebar.html', call: { file: 'boards/b.html', path: [0, 0] } }],
+    el(3, [0, 1], 'main'),
+  ]);
+  const boxes = [box(1, null, 0, 0, 1440, 900), box(2, 1, 0, 0, 240, 900), box(3, 1, 240, 0, 1200, 900, true)];
+  const { roots } = nodes.tree(boxes, sources, { w: 1440, h: 900 });
+  assert.deepStrictEqual(roots.map((r) => [r.kind, r.name]), [['component', 'x-sidebar'], ['element', 'main']]);
+  // a top component as big as the board stays selectable
+  const comp = new Map([[1, { ...sources.get(2), path: [0] }], el(3, [0, 0], 'main')]);
+  assert.deepStrictEqual(nodes.tree([box(1, null, 0, 0, 1440, 900), box(3, 1, 0, 0, 100, 100, true)], comp, { w: 1440, h: 900 }).roots.map((r) => r.k), [1]);
+  // without the viewport (old callers) nothing changes
+  assert.deepStrictEqual(nodes.tree(boxes, sources).roots.map((r) => r.k), [1]);
+});
+
 const count = (ns) => ns.reduce((n, x) => n + 1 + count(x.children), 0);
 const depth = (ns) => ns.reduce((d, x) => Math.max(d, 1 + depth(x.children)), 0);
 

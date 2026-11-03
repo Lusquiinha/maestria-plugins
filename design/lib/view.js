@@ -189,8 +189,10 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], node
         if (!ch.rect) continue;
         for (const c of onImages(i, ch.rect)) hits.push({ board: sel.board, k: ch.k, ...c, tap: `sel:${sel.board}:${n.k}`, dbl: `child:${sel.board}:${ch.k}` });
       }
-      // the chrome keeps its size on screen: canvas px / zoom scale
-      const scale = num(ui.scale) && ui.scale > 0 ? ui.scale : 1;
+      // the chrome keeps its size on screen: canvas px / (zoom scale x the
+      // app's fit factor, 1 on apps that do not send it)
+      const pos = (v) => (num(v) && v > 0 ? v : 1);
+      const scale = pos(ui.scale) * pos(ui.fit);
       const labelH = LABEL_H / scale;
       const chrome = { labelH, fontSize: 14 / scale, padX: 6 / scale, padY: 2 / scale, border: 2 / scale };
       for (const c of onImages(i, n.rect)) selections.push({ ...c, label: String(n.name || ''), labelTop: c.top - labelH, ...chrome });

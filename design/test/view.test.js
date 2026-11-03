@@ -357,6 +357,13 @@ test('selection chrome keeps its on-screen size: zoom scale 2 halves it', () => 
   assert.strictEqual(s.labelTop, s.top - 12);
 });
 
+test('chrome_divides_by_scale_times_fit', () => {
+  const pick = (ui) => { const s = sel({ ui: { theme: 'light', sel: { board: 'a', k: 2 }, ...ui } }).selections[0]; return [s.labelH, s.fontSize, s.padX, s.padY, s.border, s.top - s.labelTop]; };
+  assert.deepStrictEqual(pick({ scale: 2, fit: 0.5 }), pick({ scale: 1, fit: 1 }));
+  assert.deepStrictEqual(pick({ scale: 1, fit: 0.5 }), pick({ scale: 0.5 }));
+  assert.deepStrictEqual(pick({ scale: 2, fit: 0 }), pick({ scale: 2 }), 'a bad fit counts as 1');
+});
+
 test('parentOf finds the parent (null at the top)', () => {
   assert.strictEqual(view.parentOf(NODES.a, 3).k, 1);
   assert.strictEqual(view.parentOf(NODES.a, 1), null);

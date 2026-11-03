@@ -80,19 +80,25 @@ function withCalls(boxes, sources) {
 // Returns { roots: Node[] }, Node = { k, rect, kind, name, file, path, call,
 // componentFile, children } (call/componentFile null for elements).
 // Skipped (their children move up): boxes with no source, and plain element
-// wrappers without own text whose rect equals the parent's. Breadth-first, so
-// the 2000-node cap keeps the outer levels; deeper than 12 levels is dropped.
-function tree(boxes, sources) {
+// wrappers without own text whose rect equals the parent's, and, with the
+// board `viewport` ({ w, h }, CSS px), a top-level non-component that covers
+// the whole board (the page wrapper: its children are the roots). Breadth-
+// first, so the 2000-node cap keeps the outer levels; deeper than 12 levels is
+// dropped.
+function tree(boxes, sources, viewport = null) {
   const kids = new Map(); // parent k (null = top) -> boxes
   for (const b of withCalls(boxes, sources)) {
     const list = kids.get(b.p ?? null);
     if (list) list.push(b); else kids.set(b.p ?? null, [b]);
   }
   // kept children of a box, looking through skipped ones
+  const coversBoard = (b) => viewport && Math.abs(b.x) <= SAME && Math.abs(b.y) <= SAME
+    && Math.abs(b.w - viewport.w) <= SAME && b.h >= viewport.h - SAME;
   const keptUnder = (k, rect, acc = []) => {
     for (const b of kids.get(k) || []) {
       const src = sources.get(b.k);
-      const skip = !src || (src.kind === 'element' && !b.text && rect && sameRect(b, rect));
+      const skip = !src || (src.kind === 'element' && !b.text && rect && sameRect(b, rect))
+        || (!rect && src.kind !== 'component' && coversBoard(b));
       if (skip) keptUnder(b.k, rect, acc);
       else acc.push(b);
     }

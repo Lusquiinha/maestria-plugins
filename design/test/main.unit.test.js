@@ -404,3 +404,53 @@ test('the zoom scale from onZoom/onMove shrinks the selection chrome', async () 
     main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
   }
 });
+
+test('fit from onZoom/onMove divides the chrome too (absent: 1)', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return { open: true }; };
+  const V = await selCanvas('sel-fit');
+  try {
+    await main.onAction(V, 'sel:x:2');
+    await main.onAction(V, 'zoom', { scale: 2, fit: 0.5 });
+    assert.strictEqual(V.ui.fit, 0.5);
+    assert.ok(Math.abs(lastData(calls).selection.border - 2) < 1e-6, 'scale 2 x fit 0.5 = 1');
+    const n = calls.length;
+    await main.onAction(V, 'zoom', { scale: 2, fit: 0.5 });
+    assert.strictEqual(calls.filter((c) => c.m === 'view.update').length, calls.slice(0, n).filter((c) => c.m === 'view.update').length, 'nothing changed: no redraw');
+    await main.onAction(V, 'zoom', { scale: 2, fit: 0.25 });
+    assert.ok(Math.abs(lastData(calls).selection.border - 4) < 1e-6, 'fit alone re-renders');
+    await sleep(260);
+    await main.onAction(V, 'move', { scale: 2, fit: 1, x: 0, y: 0 });
+    assert.ok(Math.abs(lastData(calls).selection.border - 1) < 1e-6);
+    await sleep(260);
+    await main.onAction(V, 'zoom', { scale: 4 });
+    assert.strictEqual(V.ui.fit, 1, 'an old app sends no fit');
+  } finally {
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
+test('ctrl+c after the source changed but before the new render shows the message and copies nothing', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return { open: true }; };
+  const V = await selCanvas('sel-stale');
+  try {
+    fs.mkdirSync(path.join(V.dir, 'boards'), { recursive: true });
+    const src = path.join(V.dir, 'boards', 'x.html');
+    fs.writeFileSync(src, '<p>1</p><p>2</p>');
+    const nodesFile = path.join(tmp, main.hashOf(V.dir), 'nodes', 'x.json');
+    fs.utimesSync(nodesFile, 1000, 1000);
+    fs.utimesSync(src, 2000, 2000);
+    await main.onAction(V, 'sel:x:1');
+    await main.onAction(V, 'key', { key: 'ctrl+c' });
+    assert.ok(!calls.some((c) => c.m === 'clipboard.write'), 'nothing copied');
+    assert.ok(calls.some((c) => c.m === 'window.showBanner' && c.p.text === 'a prancheta mudou: espere a imagem nova'));
+    fs.utimesSync(nodesFile, 3000, 3000);
+    await main.onAction(V, 'key', { key: 'ctrl+c' });
+    assert.match(calls.find((c) => c.m === 'clipboard.write').p.text, /^@n\d+$/);
+  } finally {
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});

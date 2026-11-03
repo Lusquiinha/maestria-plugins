@@ -204,7 +204,7 @@ async function openCanvas(input, { tabId, cwd } = {}) {
     title: `design: ${canvas.title}`,
     canvas,
     states: new Map(),
-    ui: { theme: 'both', follow: true, highlight: null, command: null, rev: 0, message: 'abrindo o canvas…', sel: null, level: null, scale: 1 },
+    ui: { theme: 'both', follow: true, highlight: null, command: null, rev: 0, message: 'abrindo o canvas…', sel: null, level: null, scale: 1, fit: 1 },
     nodes: new Map(), // board -> nodes tree (selection)
     engine: null,
     fresh: new Set(),
@@ -322,20 +322,33 @@ async function copySelection(V) {
   const tree = sel && nodesOf(V, sel.board);
   const node = tree && view.findNode(tree, sel.k);
   if (!node) return;
-  const code = refs.open(dataDirOf(V.dir), V.dir).codeFor(sel.board, { ...node, via: refs.viaOf(tree.roots, node.k) });
+  let code;
+  try {
+    code = refs.open(dataDirOf(V.dir), V.dir).codeFor(sel.board, { ...node, via: refs.viaOf(tree.roots, node.k) });
+  } catch (e) {
+    return banner(errText(e));
+  }
   await mx.request('clipboard.write', { text: code });
   banner(`copiado ${code}`);
 }
 
 const TAP_AFTER_MOVE_MS = 250;
 
-// The zoom scale (onZoom/onMove), so the selection chrome keeps its size on
-// screen; redraws only when something selected has to follow it.
-function rescale(V, scale) {
-  const s = Number(scale);
-  if (!(s > 0) || s === V.ui.scale) return null;
-  V.ui.scale = s;
-  return V.ui.sel ? render(V) : null;
+// The zoom scale and the app's fit factor (onZoom/onMove extras; fit is 1 on
+// apps that do not send it), so the selection chrome keeps its size on screen;
+// redraws only when something selected has to follow them.
+function zoomOf(V, vals) {
+  const s = Number(vals.scale);
+  const f = Number(vals.fit);
+  const scale = s > 0 ? s : V.ui.scale;
+  const fit = f > 0 ? f : 1;
+  const changed = scale !== V.ui.scale || fit !== V.ui.fit;
+  V.ui.scale = scale;
+  V.ui.fit = fit;
+  return changed;
+}
+function rescale(V, vals) {
+  return zoomOf(V, vals) && V.ui.sel ? render(V) : null;
 }
 
 const KEY_ZOOM = { 'ctrl+0': 'fit', 'ctrl+=': 'in', 'ctrl+-': 'out' };
@@ -379,7 +392,7 @@ async function onAction(V, act, vals = {}) {
   if (act === 'zoom') {
     // onZoom also reports the end of our own commands
     if (follow.isUserMove({ now, lastCommand: V.lastCommand })) V.lastUserMove = now;
-    return rescale(V, vals.scale);
+    return rescale(V, vals);
   }
   if (act === 'move') { // onMove only fires for the user's own pan or wheel
     V.lastUserMove = now;
@@ -389,11 +402,10 @@ async function onAction(V, act, vals = {}) {
     if (tap && now - tap.at < TAP_AFTER_MOVE_MS) { // that tap ended this pan: undo it
       V.ui.sel = tap.sel;
       V.ui.level = tap.level;
-      const s = Number(vals.scale);
-      if (s > 0) V.ui.scale = s;
+      zoomOf(V, vals);
       return render(V);
     }
-    return rescale(V, vals.scale);
+    return rescale(V, vals);
   }
   if (act === 'seguir') { V.ui.follow = !V.ui.follow; return render(V); }
   if (verb === 'tema' && ['light', 'dark', 'both'].includes(arg)) { V.ui.theme = arg; return render(V); }

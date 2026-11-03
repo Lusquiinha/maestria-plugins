@@ -30,6 +30,12 @@ function canvas(files) {
   return { dir, data: path.join(dir + '-data') };
 }
 
+// a plugin data dir of its own: <plugin>/<hash> per canvas, the counter in <plugin>
+function plugin(...canvases) {
+  const root = fs.mkdtempSync(path.join(tmp, 'plugin-'));
+  return canvases.map((files, i) => ({ dir: canvas(files).dir, data: path.join(root, `h${i}`), root }));
+}
+
 const el = (file, p, extra = {}) => ({ k: 99, kind: 'element', name: 'div', file, path: p, call: null, componentFile: null, children: [], ...extra });
 const comp = (name, file, p) => ({ k: 98, kind: 'component', name, file, path: p, call: { file, path: p }, componentFile: `components/${name}.html`, children: [] });
 
@@ -238,4 +244,44 @@ test('every source of an annotated expand resolves to the tag written there', ()
     assert.ok(!res.stale && !res.unknown, JSON.stringify(s));
     assert.ok(res.snippet.toLowerCase().startsWith(`<${s.tag}`), `${s.tag} ${res.snippet}`);
   }
+});
+
+test('codes_never_collide_across_canvases', () => {
+  const [a, b] = plugin({ 'boards/a.html': '<p>a</p>' }, { 'boards/a.html': '<p>b</p>' });
+  assert.strictEqual(refs.open(a.data, a.dir).codeFor('a', el('boards/a.html', [0])), '@n1');
+  assert.strictEqual(refs.open(b.data, b.dir).codeFor('a', el('boards/a.html', [0])), '@n2');
+  assert.ok(fs.existsSync(path.join(a.root, 'refs-counter.json')), 'one counter in the plugin data dir');
+  assert.ok(fs.existsSync(path.join(a.data, 'refs.json')) && fs.existsSync(path.join(b.data, 'refs.json')), 'maps stay per canvas');
+  assert.deepStrictEqual(refs.open(b.data, b.dir).resolve('@n1', b.dir), { unknown: true });
+  assert.strictEqual(refs.open(a.data, a.dir).resolve('@n1', a.dir).snippet, '<p>a</p>');
+  assert.strictEqual(refs.open(a.data, a.dir).codeFor('a', el('boards/a.html', [0])), '@n1', 'the same element keeps its code');
+});
+
+test('codeFor_refuses_when_source_newer_than_nodes', () => {
+  const [c] = plugin({
+    'components/Card.html': '<section><h2>t</h2></section>',
+    'boards/a.html': '<main><x-card></x-card><p>oi</p></main>',
+  });
+  const nodesFile = path.join(c.data, 'nodes', 'a.json');
+  fs.mkdirSync(path.dirname(nodesFile), { recursive: true });
+  fs.writeFileSync(nodesFile, '{}');
+  const at = (f, s) => fs.utimesSync(path.join(c.dir, f), s, s);
+  const nodesAt = (s) => fs.utimesSync(nodesFile, s, s);
+  const r = refs.open(c.data, c.dir);
+  const h2 = { ...el('components/Card.html', [0, 0]), via: [{ file: 'boards/a.html', path: [0, 0], componentFile: 'components/Card.html' }] };
+  nodesAt(2000); at('boards/a.html', 1000); at('components/Card.html', 1000);
+  const p = r.codeFor('a', el('boards/a.html', [0, 1]));
+  assert.match(p, /^@n\d+$/);
+  assert.match(r.codeFor('a', h2), /^@n\d+$/);
+  at('boards/a.html', 3000);
+  assert.throws(() => r.codeFor('a', el('boards/a.html', [0, 1])), { message: 'a prancheta mudou: espere a imagem nova' });
+  at('boards/a.html', 1000); at('components/Card.html', 3000);
+  assert.throws(() => r.codeFor('a', h2), { message: 'a prancheta mudou: espere a imagem nova' }, 'the component file');
+  assert.strictEqual(r.codeFor('a', el('boards/a.html', [0, 1])), p, 'a file it does not come from does not matter');
+  at('components/Card.html', 1000);
+  const viaChanged = { ...h2, via: [{ file: 'boards/a.html', path: [0, 0], componentFile: 'components/Card.html' }] };
+  at('boards/a.html', 3000);
+  assert.throws(() => r.codeFor('a', viaChanged), /a prancheta mudou/, 'the board holding the call');
+  nodesAt(4000);
+  assert.match(r.codeFor('a', viaChanged), /^@n\d+$/, 'the new render is in');
 });
