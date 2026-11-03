@@ -111,6 +111,20 @@ function insideRepo(dir) {
   } catch { return false; }
 }
 
+function ownerRepo(dir) {
+  let at = dir;
+  while (!fs.existsSync(at) && path.dirname(at) !== at) at = path.dirname(at);
+  return insideRepo(at) ? gitRoot(at) : dir;
+}
+
+function setRepo(dir, repo) {
+  const file = path.join(dir, 'design.json');
+  const design = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (design.repo === repo) return false;
+  writeAtomic(file, `${JSON.stringify({ ...design, repo, darkMode: readDarkMode(repo), css: project.cssVarFiles(repo) }, null, 2)}\n`);
+  return true;
+}
+
 function defaultDir({ cwd, name, home = os.homedir() }) {
   if (!validName(name)) {
     throw new Error(`nome de canvas inválido: "${name}" — use letras minúsculas, números, - e _`);
@@ -178,4 +192,4 @@ function list({ home = os.homedir(), last = {} } = {}) {
     .sort((a, b) => b.lastUsed - a.lastUsed || a.name.localeCompare(b.name) || a.dir.localeCompare(b.dir));
 }
 
-module.exports = { read, write, upsertBoard, resolveDir, defaultDir, init, validName, gitRoot, childRepos, insideRepo, list };
+module.exports = { read, write, upsertBoard, resolveDir, defaultDir, init, validName, gitRoot, childRepos, insideRepo, ownerRepo, setRepo, list };

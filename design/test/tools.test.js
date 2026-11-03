@@ -77,7 +77,7 @@ test('design_open without a name directly under home is an error with the exact 
   const host = fakeHost();
   const r = await tools.handle('design_open', {}, ctxOf(host, { cwd: path.join(home, 'solto') }));
   assert.strictEqual(r.isError, true);
-  assert.strictEqual(textOf(r), 'diga onde criar o canvas (ex.: ~/Desktop/Work/Ninepay/design/<nome>)');
+  assert.strictEqual(textOf(r), 'diga onde criar o canvas: passe `canvas` com a pasta (ex.: ~/design/<nome>); fora de um repositório ele fica independente, com a paleta padrão do Tailwind');
   assert.strictEqual(host.calls.length, 0);
 });
 
@@ -301,15 +301,15 @@ test('a board registered moments ago renders and focuses right away', async () =
   assert.ok(!f.isError, textOf(f));
 });
 
-test('design_open on a design.json without repo is a readable error', async () => {
+test('design_open on a design.json without repo stands the canvas alone on its folder', async () => {
   const host = fakeHost();
   const dir = path.join(home, 'co', 'design', 'semrepo');
   fs.mkdirSync(dir, { recursive: true });
   canvasMod.write(dir, { v: 1, title: 'semrepo', boards: {}, order: [] });
   fs.writeFileSync(path.join(dir, 'design.json'), JSON.stringify({ darkMode: { class: 'dark' }, css: [] }));
   const r = await tools.handle('design_open', { canvas: dir }, ctxOf(host, { cwd: undefined }));
-  assert.strictEqual(r.isError, true);
-  assert.match(textOf(r), /design\.json.*"repo"/);
+  assert.ok(!r.isError, textOf(r));
+  assert.match(textOf(r), new RegExp(`repo: ${dir}`));
   assert.doesNotMatch(textOf(r), /paths\[1\]|TypeError/);
 });
 
@@ -480,4 +480,24 @@ test('the portable entry keeps the theme, drops package imports and plugins, and
   const css = '@import "tailwindcss";\n@import "tw-animate-css";\n@plugin "@tailwindcss/typography";\n@import "./tokens.css";\n@theme { --color-ink: #111; }\n';
   const out = project.portableEntry(css, '/repo/src/app');
   assert.strictEqual(out, '@import "tailwindcss";\n@import "/repo/src/app/tokens.css";\n@theme { --color-ink: #111; }\n');
+});
+
+test('a canvas outside any repo, opened from a home full of repos, stands alone on its own folder', async () => {
+  const host = fakeHost();
+  for (const r of ['.nvm', '.oh-my-zsh']) fs.mkdirSync(path.join(home, r, '.git'), { recursive: true });
+  const r = await tools.handle('design_open', { canvas: '~/soltos/geral' }, ctxOf(host, { cwd: home }));
+  assert.ok(!r.isError, textOf(r));
+  const dir = path.join(home, 'soltos', 'geral');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8')).repo, dir);
+  assert.match(textOf(r), /o projeto não tem tailwind; use a paleta padrão do Tailwind v4/);
+});
+
+test('repo passed for an existing canvas rewrites design.json and says it applies on reopen', async () => {
+  const host = fakeHost();
+  await tools.handle('design_open', { name: 'troca', repo: 'api' }, ctxOf(host, { cwd: mono }));
+  const dir = path.join(mono, 'design', 'troca');
+  const r = await tools.handle('design_open', { canvas: dir, repo: path.join(mono, 'admin') }, ctxOf(host, { cwd: mono }));
+  assert.ok(!r.isError, textOf(r));
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8')).repo, path.join(mono, 'admin'));
+  assert.match(textOf(r), /repo trocado no design.json/);
 });

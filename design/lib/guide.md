@@ -37,6 +37,7 @@ pans (left-drag never pans); click selects a component, double-click goes into i
 - Use only the project's Tailwind classes and its color families (design_open prints them above
   this guide, in the line `cores do tailwind do projeto`). When that line says the project has no
   Tailwind, use the default Tailwind v4 palette.
+- Standalone canvas: pass `repo` = the canvas folder; without Tailwind it uses the default v4 palette.
   No arbitrary hex colors, no inline styles for color, no invented class names.
 - Dark mode: use the project's `dark:` variants or its theme variables; the plugin toggles the
   switch declared in design.json. Check that text stays readable in both.

@@ -51,7 +51,7 @@
             },
             "repo": {
               "type": "string",
-              "description": "Repository this design is for (absolute, ~/ or relative to the session cwd): its Tailwind theme and colors style the boards. Omit to use the session's repo; pass it when the session folder holds several repos. A repo without Tailwind gets the default palette."
+              "description": "Project whose Tailwind theme styles the boards (absolute, ~/ or relative to the session cwd). Omit to use the repo holding the canvas, else the session's repo; pass it when the session folder holds several repos. For a standalone canvas pass the canvas folder itself: without Tailwind the boards use the default Tailwind v4 palette."
             }
           },
           "additionalProperties": false

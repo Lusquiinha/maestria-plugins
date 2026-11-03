@@ -113,7 +113,7 @@ test('rejects fast with a clear error once the restart also dies', { skip: !have
   process.kill(tw.pid, 'SIGKILL'); // second kill: the single restart is spent
   await new Promise((r) => setTimeout(r, 200));
   const t0 = Date.now();
-  await assert.rejects(tw.whenBuilt(Date.now()), /^Error: o tailwind do projeto não subiu: /);
+  await assert.rejects(tw.whenBuilt(Date.now()), /^Error: o tailwind de .+ não subiu: /);
   assert.ok(Date.now() - t0 < 1000, `took ${Date.now() - t0} ms`);
 });
 
@@ -160,7 +160,7 @@ test('a tailwind binary that cannot spawn fails at once with a readable error', 
     { tailwind: { version: 3, bin: path.join(dir, 'nope', 'tailwindcss') }, sass: null });
   t._writeInputs = function writeInputs() { this.args = []; };
   const t0 = Date.now();
-  await assert.rejects(t.init(), /^Error: o tailwind do projeto não subiu: .*ENOENT/);
+  await assert.rejects(t.init(), /^Error: o tailwind de .+ não subiu: .*ENOENT/);
   assert.ok(Date.now() - t0 < 1000, `took ${Date.now() - t0} ms`);
   await t.stop();
 });

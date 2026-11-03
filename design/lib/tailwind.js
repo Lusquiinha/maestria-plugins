@@ -119,7 +119,7 @@ class Tailwind {
       // spawn failed (ENOENT, EACCES): no 'exit' worth waiting for, fail now
       this.stderr += `\n${e.message}`;
       if (this.child === child) this.child = null;
-      if (!this.stopping) this.failed = new Error(`o tailwind do projeto não subiu: ${e.message}`);
+      if (!this.stopping) this.failed = new Error(`o tailwind de ${this.opts.repoDir} não subiu: ${e.message}`);
     });
     child.on('exit', (code, signal) => {
       if (this.child !== child) return;
@@ -132,7 +132,7 @@ class Tailwind {
         this._spawn();
         this.stderr = last; // keep why the first one died until the new one builds
       } else {
-        this.failed = new Error(`o tailwind do projeto não subiu: ${this.lastErrors()}`);
+        this.failed = new Error(`o tailwind de ${this.opts.repoDir} não subiu: ${this.lastErrors()}`);
       }
     });
   }
@@ -179,7 +179,7 @@ class Tailwind {
           prev = null;
         }
         if (Date.now() - t0 > timeoutMs) {
-          return reject(new Error(`o tailwind do projeto não subiu: sem css em ${timeoutMs / 1000} s\n${this.lastErrors()}`));
+          return reject(new Error(`o tailwind de ${this.opts.repoDir} não subiu: sem css em ${timeoutMs / 1000} s\n${this.lastErrors()}`));
         }
         setTimeout(tick, POLL_MS);
       };
