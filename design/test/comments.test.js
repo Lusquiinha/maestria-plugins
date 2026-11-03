@@ -1,0 +1,68 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const comments = require('../lib/comments');
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'design-comments-'));
+test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+const fresh = () => fs.mkdtempSync(path.join(tmp, 'c-'));
+
+test('add, list, reply, edit, remove round-trip through the file', () => {
+  const dir = fresh();
+  const C = comments.open(dir);
+  assert.deepStrictEqual(C.list(), []);
+  const id = C.add({ board: 'a', code: '@n1', text: 'azul' });
+  assert.strictEqual(id, 1);
+  C.reply(id, { author: 'claude', text: 'feito' });
+  C.edit(id, 'verde');
+  const again = comments.open(dir).list();
+  assert.strictEqual(again.length, 1);
+  assert.strictEqual(again[0].text, 'verde');
+  assert.strictEqual(again[0].status, 'aberto');
+  assert.strictEqual(again[0].replies[0].author, 'claude');
+  assert.match(again[0].created, /^\d{4}-\d\d-\d\dT/);
+  comments.open(dir).remove(id);
+  assert.deepStrictEqual(C.list(), []);
+  assert.deepStrictEqual(fs.readdirSync(dir), ['comments.json']);
+});
+
+test('ids are never reused after a remove', () => {
+  const C = comments.open(fresh());
+  const a = C.add({ board: 'a', code: '@n1', text: 'x' });
+  const b = C.add({ board: 'a', code: '@n2', text: 'y' });
+  C.remove(b);
+  assert.strictEqual(C.add({ board: 'a', code: '@n3', text: 'z' }), b + 1);
+  C.remove(a);
+  assert.strictEqual(C.add({ board: 'a', code: '@n4', text: 'w' }), b + 2);
+});
+
+test('done marks feito; an arthur reply reopens; claude reply without done keeps it', () => {
+  const C = comments.open(fresh());
+  const id = C.add({ board: 'a', code: '@n1', text: 'x' });
+  C.reply(id, { author: 'claude', text: 'ok', done: true });
+  assert.strictEqual(C.list()[0].status, 'feito');
+  C.reply(id, { author: 'claude', text: 'nota' });
+  assert.strictEqual(C.list()[0].status, 'feito');
+  C.reply(id, { author: 'arthur', text: 'ainda não' });
+  assert.strictEqual(C.list()[0].status, 'aberto');
+});
+
+test('list filters by status', () => {
+  const C = comments.open(fresh());
+  const a = C.add({ board: 'a', code: '@n1', text: 'x' });
+  C.add({ board: 'a', code: '@n2', text: 'y' });
+  C.reply(a, { author: 'claude', text: 'ok', done: true });
+  assert.deepStrictEqual(C.list('aberto').map((c) => c.id), [2]);
+  assert.deepStrictEqual(C.list('feito').map((c) => c.id), [1]);
+  assert.strictEqual(C.list('todos').length, 2);
+});
+
+test('unknown id throws "Comentário <id> não existe"', () => {
+  const C = comments.open(fresh());
+  assert.throws(() => C.reply(9, { author: 'claude', text: 'x' }), /Comentário 9 não existe/);
+  assert.throws(() => C.edit(9, 'x'), /Comentário 9 não existe/);
+  assert.throws(() => C.remove(9), /Comentário 9 não existe/);
+});

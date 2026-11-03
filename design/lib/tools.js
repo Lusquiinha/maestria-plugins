@@ -11,6 +11,7 @@ const project = require('./project');
 const refs = require('./refs');
 const marks = require('./marks');
 const crop = require('./crop');
+const commentsMod = require('./comments');
 
 const GUIDE = path.join(__dirname, 'guide.md');
 const MAX_BOARDS = 4; // boards with images per design_render call
@@ -88,6 +89,25 @@ const SCHEMAS = [
       type: 'object',
       properties: { ref: { type: 'string', description: 'The code as pasted, e.g. @n12.' }, canvas: CANVAS },
       required: ['ref'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'design_comments',
+    description: 'List the comments the user left on canvas elements (default: open ones) with board, code, text, replies and, for each element, where to edit (file:line, component) or that its code is stale/unknown. Use it when asked to "do the comments".',
+    inputSchema: {
+      type: 'object',
+      properties: { status: { type: 'string', enum: ['aberto', 'feito', 'todos'], description: 'Default: aberto.' }, canvas: CANVAS },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'design_comment_reply',
+    description: 'Reply to a comment saying what you changed. done: true marks it feito; use done: false (comment stays aberto) when in doubt or unable to do it.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'integer', description: 'Comment number from design_comments.' }, text: { type: 'string' }, done: { type: 'boolean' }, canvas: CANVAS },
+      required: ['id', 'text', 'done'],
       additionalProperties: false,
     },
   },
@@ -315,7 +335,38 @@ async function ref(args, ctx) {
   return { content: [{ type: 'text', text: lines.join('\n') }, ...content] };
 }
 
-const HANDLERS = { design_open: open, design_board: board, design_render: render, design_focus: focus, design_list: list, design_ref: ref };
+async function commentsList(args, ctx) {
+  const dir = resolveFrom(args, ctx);
+  const status = args.status || 'aberto';
+  if (!['aberto', 'feito', 'todos'].includes(status)) return fail('status deve ser aberto, feito ou todos');
+  const items = commentsMod.open(dir).list(status);
+  if (ctx.host.remember) ctx.host.remember(dir, { tabId: ctx.tabId, cwd: ctx.cwd });
+  if (!items.length) return text(`nenhum comentário ${status === 'todos' ? '' : `${status} `}em ${dir}`.replace('  ', ' '));
+  const R = refs.open(ctx.host.dataDirOf(dir), dir);
+  const lines = [`comentários (${items.length}) em ${dir}:`];
+  for (const c of items) {
+    lines.push(`#${c.id} [${c.status}] ${c.board} ${c.code}: ${c.text}`);
+    for (const r of c.replies) lines.push(`  ${r.author}: ${r.text}`);
+    const res = R.resolve(c.code, dir);
+    if (res.unknown) lines.push('  elemento: código desconhecido neste canvas (avise no comentário em vez de chutar)');
+    else if (res.stale) lines.push(`  elemento: ${STALE} (o elemento mudou ou sumiu; avise no comentário em vez de chutar)`);
+    else {
+      lines.push(`  elemento <${res.tag || res.name || '?'}>: ${path.join(dir, res.file)}:${res.line}`);
+      if (res.call) lines.push(`  instância: ${path.join(dir, res.call.file)}:${res.call.line}`);
+      if (res.componentFile) lines.push(`  componente: ${path.join(dir, res.componentFile)} (usado em: ${res.usedIn.join(', ') || 'nenhuma prancheta'})`);
+      lines.push(`  detalhes: design_ref ${c.code}`);
+    }
+  }
+  return text(lines.join('\n'));
+}
+
+async function commentReply(args, ctx) {
+  const dir = resolveFrom(args, ctx);
+  commentsMod.open(dir).reply(args.id, { author: 'claude', text: String(args.text), done: args.done === true });
+  return text(`resposta registrada no comentário ${args.id}${args.done === true ? ' (feito)' : ''}`);
+}
+
+const HANDLERS = { design_open: open, design_board: board, design_render: render, design_focus: focus, design_list: list, design_ref: ref, design_comments: commentsList, design_comment_reply: commentReply };
 
 async function handle(name, args, ctx) {
   const fn = HANDLERS[name];

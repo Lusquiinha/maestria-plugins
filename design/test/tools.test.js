@@ -66,7 +66,7 @@ const textOf = (r) => r.content.filter((c) => c.type === 'text').map((c) => c.te
 
 test('manifest-facing schemas: design_ names, object inputSchema', () => {
   assert.deepStrictEqual(tools.SCHEMAS.map((s) => s.name),
-    ['design_open', 'design_board', 'design_render', 'design_focus', 'design_list', 'design_ref']);
+    ['design_open', 'design_board', 'design_render', 'design_focus', 'design_list', 'design_ref', 'design_comments', 'design_comment_reply']);
   for (const s of tools.SCHEMAS) {
     assert.strictEqual(s.inputSchema.type, 'object');
     assert.ok(s.description.length > 20 && s.description.length < 400);
@@ -380,4 +380,35 @@ test('design_ref of a stale code is an error with the exact message', async () =
   const r = await tools.handle('design_ref', { ref: code }, ctxOf(host));
   assert.strictEqual(r.isError, true);
   assert.strictEqual(textOf(r), 'código vencido: selecione de novo');
+});
+
+// ---- design_comments / design_comment_reply -------------------------------------
+const commentsMod = require('../lib/comments');
+
+test('design_comments lists with the resolved ref, reports stale and unknown; filters by status', async () => {
+  const { host, dir, data, roots } = await refCanvas();
+  const code = refs.open(data, dir).codeFor('a', roots[0].children[0]);
+  const C = commentsMod.open(dir);
+  const ok = C.add({ board: 'a', code, text: 'mais largo' });
+  C.add({ board: 'a', code: '@n99999', text: 'fantasma' });
+  const r = await tools.handle('design_comments', {}, ctxOf(host));
+  const t = textOf(r);
+  assert.ok(!r.isError);
+  assert.match(t, new RegExp(`#${ok} \\[aberto\\] a ${code.replace('@', '@')}`));
+  assert.match(t, /mais largo/);
+  assert.match(t, /components\/NavItem\.html/);
+  assert.match(t, /desconhecido/);
+  fs.writeFileSync(path.join(dir, 'boards', 'a.html'), '<p>outro</p>\n<nav>\n  <x-nav-item label="Início"></x-nav-item>\n</nav>');
+  assert.match(textOf(await tools.handle('design_comments', {}, ctxOf(host))), /vencido|stale/i);
+  await tools.handle('design_comment_reply', { id: ok, text: 'feito', done: true }, ctxOf(host));
+  assert.ok(!/mais largo/.test(textOf(await tools.handle('design_comments', { status: 'aberto' }, ctxOf(host)))));
+  assert.match(textOf(await tools.handle('design_comments', { status: 'feito' }, ctxOf(host))), /mais largo[\s\S]*claude: feito/);
+});
+
+test('design_comments with none says so; design_comment_reply on unknown id is an error', async () => {
+  const { host } = await refCanvas();
+  assert.match(textOf(await tools.handle('design_comments', {}, ctxOf(host))), /nenhum comentário/i);
+  const r = await tools.handle('design_comment_reply', { id: 42, text: 'x', done: false }, ctxOf(host));
+  assert.strictEqual(r.isError, true);
+  assert.strictEqual(textOf(r), 'Comentário 42 não existe');
 });
