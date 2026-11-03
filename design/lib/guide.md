@@ -19,6 +19,9 @@ project's own Tailwind, in light and dark, and shows it on a canvas beside this 
 
 ## Codes from the canvas (`@n…`)
 The user selects an element on the canvas and pastes its code (`@n12`) in the chat.
+Gestures (the user's side, for context): wheel zooms around the cursor; middle button or space + drag
+pans (left-drag never pans); click selects a component, double-click goes into it; Ctrl+C or right-click →
+"Copiar código" copies the `@n…`; double-click a screen's label renames it (title only). The user calls boards "telas".
 - A `@n…` in the user's message → call `design_ref { ref: "@n12" }` BEFORE editing. It returns the
   board, the exact file:line and snippet to edit, and an image of the element. Edit that spot only.
 - A code points at one instance: three `<x-item>` on a board are three codes. For an element of a
@@ -67,3 +70,10 @@ Create `components/Toast.html`, use it as `<x-toast text="Salvo" tone="success">
 ## Reading results
 design_render returns one line per board (size, ms, error or "cortada" when the page is taller
 than the image limit) plus the images. A board with an error keeps its previous image on the canvas.
+
+## Comentários
+O Arthur deixa comentários nos elementos (botão direito, "Comentar…") e depois pede "faz os comentários".
+Nesse caso: `design_comments` (só os abertos); para cada um, primeiro `design_ref <código>` (marca o elemento
+e mostra o trecho), depois edite o que ele pede (um código vencido ou desconhecido não se chuta) e chame `design_comment_reply` com o que
+mudou e `done: true`. Em dúvida, ou se não deu para fazer, responda com `done: false`: o comentário fica aberto.
+Comentários feitos continuam no canvas até o Arthur apagar.

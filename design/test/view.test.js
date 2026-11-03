@@ -206,7 +206,7 @@ test('manifest: id, main, activation events, commands', () => {
   assert.strictEqual(m.name, 'Design');
   assert.strictEqual(m.maestria, 1);
   assert.deepStrictEqual(m.main, ['node', 'main.js']);
-  assert.deepStrictEqual(m.activationEvents, ['onCommand:abrir', 'onTool:design_open', 'onTool:design_board', 'onTool:design_render', 'onTool:design_focus', 'onTool:design_list', 'onTool:design_ref', 'onHook:PreToolUse']);
+  assert.deepStrictEqual(m.activationEvents, ['onCommand:abrir', 'onTool:design_open', 'onTool:design_board', 'onTool:design_render', 'onTool:design_focus', 'onTool:design_list', 'onTool:design_ref', 'onTool:design_comments', 'onTool:design_comment_reply', 'onHook:PreToolUse']);
   assert.deepStrictEqual(m.permissions, ['sessions.create', 'hooks']);
   assert.deepStrictEqual(m.contributes.commands, [{ id: 'abrir', title: 'Design: abrir canvas de telas…' }]);
   assert.strictEqual(m.contributes.sidebar, true);
@@ -283,7 +283,12 @@ test('hits at the top level: the top components of every board, on both copies',
   ]);
   assert.strictEqual(d.hits[0].tap, 'sel:a:1');
   assert.strictEqual(d.hits[0].dbl, 'in:a:1');
-  for (const h of d.hits) assert.deepStrictEqual(h.menu, [{ action: `copy:${h.board}:${h.k}`, label: 'Copiar código' }]);
+  for (const h of d.hits) {
+    assert.deepStrictEqual(h.menu, [
+      { action: `copy:${h.board}:${h.k}`, label: 'Copiar código' },
+      { action: `comment:${h.board}:${h.k}`, label: 'Comentar…' },
+    ]);
+  }
   assert.strictEqual(d.select, true);
   assert.deepStrictEqual(d.panButtons, ['middle']);
   assert.deepStrictEqual(d.keys, ['ctrl+c', 'escape', 'ctrl+0', 'ctrl+=', 'ctrl+-']);
@@ -387,4 +392,74 @@ test('parentOf finds the parent (null at the top)', () => {
   assert.strictEqual(view.parentOf(NODES.a, 3).k, 1);
   assert.strictEqual(view.parentOf(NODES.a, 1), null);
   assert.strictEqual(view.parentOf(NODES.a, 99), null);
+});
+
+// ---- comment pins ------------------------------------------------------------
+
+const PINS = [
+  { id: 1, board: 'a', rect: { x: 10, y: 20, w: 200, h: 30 }, status: 'aberto', text: 'mais escuro', replies: [] },
+  { id: 7, board: 'b', rect: { x: 5, y: 5, w: 100, h: 50 }, status: 'feito', text: 'tirar a borda', replies: [{ author: 'claude', text: 'tirei', at: 'x' }, { author: 'arthur', text: 'ok', at: 'y' }] },
+];
+const pinned = (o = {}) => build({ caps: o.caps || SEL, ui: o.ui, extra: { pins: PINS, ...o.extra } });
+
+test('pins: one per comment and shown copy, centered on the rect\'s top-right corner', () => {
+  const d = pinned();
+  const A = img(d.boards[0]);
+  const B = img(d.boards[1]);
+  const at = (p) => [p.id, p.left, p.top, p.size];
+  assert.deepStrictEqual(d.pins.map(at), [
+    [1, A.left + 210 - 12, A.top + 20 - 12, 24],
+    [1, A.left + 210 + 1280 + 24 - 12, A.top + 20 - 12, 24],
+    [7, B.left + 105 - 12, B.top + 5 - 12, 24],
+    [7, B.left + 105 + 400 + 24 - 12, B.top + 5 - 12, 24],
+  ]);
+  const light = pinned({ ui: { theme: 'light' } });
+  assert.deepStrictEqual(light.pins.map((p) => p.id), [1, 7]);
+  const dark = pinned({ ui: { theme: 'dark' } });
+  assert.deepStrictEqual(dark.pins.map((p) => p.left), [img(dark.boards[0]).left + 210 - 12, img(dark.boards[1]).left + 105 - 12]);
+  noNull(d);
+});
+
+test('pins: open = accent with the number, feito = green with a check', () => {
+  const [open, , done] = pinned().pins;
+  assert.deepStrictEqual([open.label, open.done], ['1', false]);
+  assert.deepStrictEqual([done.label, done.done], ['✓', true]);
+});
+
+test('pins keep their on-screen size: divided by scale x fit', () => {
+  const pick = (ui) => { const p = pinned({ ui: { theme: 'light', ...ui } }).pins[0]; return [p.size, p.fontSize, p.radius]; };
+  assert.deepStrictEqual(pick({}), [24, 14, 12]);
+  assert.deepStrictEqual(pick({ scale: 2 }), [12, 7, 6]);
+  assert.deepStrictEqual(pick({ scale: 4, fit: 0.5 }), [12, 7, 6]);
+  const p = pinned({ ui: { theme: 'light', scale: 2 } }).pins[0];
+  const A = img(pinned().boards[0]);
+  assert.deepStrictEqual([p.left, p.top], [A.left + 210 - 6, A.top + 20 - 6]);
+});
+
+test('pins: tooltip is the comment then each reply; the menu replies, edits, deletes', () => {
+  const [one, , seven] = pinned().pins;
+  assert.strictEqual(one.tooltip, '#1 · mais escuro');
+  assert.strictEqual(seven.tooltip, '#7 · tirar a borda\nClaude: tirei\nArthur: ok');
+  assert.deepStrictEqual(seven.menu, [
+    { action: 'reply:7', label: 'Responder…' },
+    { action: 'edit:7', label: 'Editar…' },
+    { action: 'delete:7', label: 'Apagar comentário' },
+  ]);
+});
+
+test('pins: none without comments, on a board that is gone, or off the image', () => {
+  assert.deepStrictEqual(sel().pins, []);
+  const odd = pinned({ extra: { pins: [{ ...PINS[0], board: 'zz' }, { ...PINS[0], rect: { x: 5000, y: 0, w: 10, h: 10 } }, { ...PINS[0], rect: null }] } });
+  assert.deepStrictEqual(odd.pins, []);
+  // the pins do not need the selection caps (an old host still shows them)
+  assert.strictEqual(pinned({ caps: CAPS }).pins.length, 4);
+});
+
+test('the canvas ui: pins as a Tooltip over a Pressable with the pin menu, on top of the hits', () => {
+  const lib = fs.readFileSync(path.join(__dirname, '..', 'ui', 'canvas.rfwtxt'), 'utf8').replace(/\/\/.*$/gm, '');
+  assert.match(lib, /\.\.\.for h in data\.hits:\s*Hit\(h: h\),\s*\.\.\.for p in data\.pins:\s*Pin\(p: p\)/);
+  assert.match(lib, /Tooltip\(\s*message: args\.p\.tooltip/);
+  assert.match(lib, /menu: args\.p\.menu,\s*onMenu: event "act" \{\}/);
+  assert.match(lib, /switch args\.p\.done \{ true: data\.theme\.green, default: data\.theme\.accent \}/);
+  for (const f of ['size', 'fontSize', 'radius', 'label', 'left', 'top']) assert.match(lib, new RegExp(`args\\.p\\.${f}`));
 });

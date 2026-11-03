@@ -14,13 +14,25 @@ const ERROR_H = 56; // the error line under the images (two lines of 16 px)
 const EMPTY = { w: 1200, h: 800 };
 const BORDER = 2; // the highlight border (always drawn, transparent when off)
 const LABEL_H = 24; // the selected node's name, above its rect
+const PIN = 24; // a comment pin's diameter on screen
+const PIN_FONT = 14;
 const THEMES = ['both', 'light', 'dark'];
 // the chords the canvas listens to (KeyListener), exactly as main.js reads them
 const KEYS = ['ctrl+c', 'escape', 'ctrl+0', 'ctrl+=', 'ctrl+-'];
 
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const num = (n) => typeof n === 'number' && Number.isFinite(n);
-const copyMenu = (board, k) => [{ action: `copy:${board}:${k}`, label: 'Copiar código' }];
+const hitMenu = (board, k) => [
+  { action: `copy:${board}:${k}`, label: 'Copiar código' },
+  { action: `comment:${board}:${k}`, label: 'Comentar…' },
+];
+const pinMenu = (id) => [
+  { action: `reply:${id}`, label: 'Responder…' },
+  { action: `edit:${id}`, label: 'Editar…' },
+  { action: `delete:${id}`, label: 'Apagar comentário' },
+];
+const AUTHOR = { arthur: 'Arthur', claude: 'Claude' };
+const pinTooltip = (c) => [`#${c.id} · ${c.text}`, ...(c.replies || []).map((r) => `${AUTHOR[r.author] || r.author}: ${r.text}`)].join('\n');
 
 function getter(states) {
   if (!states) return () => null;
@@ -76,7 +88,7 @@ function parentOf(tree, k) {
   return r ? r.parent : null;
 }
 
-function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], nodes = null }) {
+function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], nodes = null, pins = [] }) {
   const get = getter(states);
   const getNodes = getter(nodes);
   // selection needs the app's middle-drag pan and key listener; without them, v1
@@ -166,6 +178,27 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], node
     scanRects.push(...onImages(i, sc.rect || { x: 0, y: 0, w: items[i].imgW, h: items[i].imgH }));
   }
 
+  // the chrome keeps its size on screen: canvas px / (zoom scale x the app's
+  // fit factor, 1 on apps that do not send it)
+  const pos = (v) => (num(v) && v > 0 ? v : 1);
+  const scale = pos(ui.scale) * pos(ui.fit);
+
+  // comment pins (rects already resolved by the caller, last known when stale):
+  // centered on the top-right corner of the element on each shown copy
+  const pinOut = [];
+  for (const c of pins || []) {
+    const i = c && c.rect ? items.findIndex((it) => it.name === c.board) : -1;
+    if (i < 0) continue;
+    const size = PIN / scale;
+    const done = c.status === 'feito';
+    for (const r of onImages(i, c.rect)) {
+      pinOut.push({
+        id: c.id, left: r.left + r.width - size / 2, top: r.top - size / 2, size, radius: size / 2, fontSize: PIN_FONT / scale,
+        label: done ? '✓' : String(c.id), done, tooltip: pinTooltip(c), menu: pinMenu(c.id),
+      });
+    }
+  }
+
   // selection: the clickable nodes of the current level (the children of
   // ui.level on its board, the top nodes elsewhere) and the selected node
   const hits = [];
@@ -178,7 +211,7 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], node
       const opened = level && level.board === it.name ? findNode(tree, level.k) : null;
       for (const n of opened ? opened.children || [] : tree.roots || []) {
         if (!n.rect) continue;
-        for (const c of onImages(i, n.rect)) hits.push({ board: it.name, k: n.k, ...c, tap: `sel:${it.name}:${n.k}`, dbl: `in:${it.name}:${n.k}`, menu: copyMenu(it.name, n.k) });
+        for (const c of onImages(i, n.rect)) hits.push({ board: it.name, k: n.k, ...c, tap: `sel:${it.name}:${n.k}`, dbl: `in:${it.name}:${n.k}`, menu: hitMenu(it.name, n.k) });
       }
     });
     const sel = ui.sel || null;
@@ -189,12 +222,8 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], node
       // the parent selected, a double click picks the child under the cursor
       for (const ch of n.children || []) {
         if (!ch.rect) continue;
-        for (const c of onImages(i, ch.rect)) hits.push({ board: sel.board, k: ch.k, ...c, tap: `sel:${sel.board}:${n.k}`, dbl: `child:${sel.board}:${ch.k}`, menu: copyMenu(sel.board, ch.k) });
+        for (const c of onImages(i, ch.rect)) hits.push({ board: sel.board, k: ch.k, ...c, tap: `sel:${sel.board}:${n.k}`, dbl: `child:${sel.board}:${ch.k}`, menu: hitMenu(sel.board, ch.k) });
       }
-      // the chrome keeps its size on screen: canvas px / (zoom scale x the
-      // app's fit factor, 1 on apps that do not send it)
-      const pos = (v) => (num(v) && v > 0 ? v : 1);
-      const scale = pos(ui.scale) * pos(ui.fit);
       const labelH = LABEL_H / scale;
       const chrome = { labelH, fontSize: 14 / scale, padX: 6 / scale, padY: 2 / scale, border: 2 / scale };
       for (const c of onImages(i, n.rect)) selections.push({ ...c, label: String(n.name || ''), labelTop: c.top - labelH, ...chrome });
@@ -247,6 +276,7 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], node
     keys: select ? [...KEYS] : [],
     hits,
     selections,
+    pins: pinOut,
     ...selectData,
     hasBoards: out.length > 0,
     warnings: ((canvas && canvas.warnings) || []).map(String),

@@ -66,7 +66,7 @@ const textOf = (r) => r.content.filter((c) => c.type === 'text').map((c) => c.te
 
 test('manifest-facing schemas: design_ names, object inputSchema', () => {
   assert.deepStrictEqual(tools.SCHEMAS.map((s) => s.name),
-    ['design_open', 'design_board', 'design_render', 'design_focus', 'design_list', 'design_ref']);
+    ['design_open', 'design_board', 'design_render', 'design_focus', 'design_list', 'design_ref', 'design_comments', 'design_comment_reply']);
   for (const s of tools.SCHEMAS) {
     assert.strictEqual(s.inputSchema.type, 'object');
     assert.ok(s.description.length > 20 && s.description.length < 400);
@@ -380,4 +380,65 @@ test('design_ref of a stale code is an error with the exact message', async () =
   const r = await tools.handle('design_ref', { ref: code }, ctxOf(host));
   assert.strictEqual(r.isError, true);
   assert.strictEqual(textOf(r), 'código vencido: selecione de novo');
+});
+
+// ---- design_comments / design_comment_reply -------------------------------------
+const commentsMod = require('../lib/comments');
+
+test('design_comments lists with the resolved ref, reports stale and unknown; filters by status', async () => {
+  const { host, dir, data, roots } = await refCanvas();
+  const code = refs.open(data, dir).codeFor('a', roots[0].children[0]);
+  const C = commentsMod.open(dir);
+  const ok = C.add({ board: 'a', code, text: 'mais largo' });
+  C.add({ board: 'a', code: '@n99999', text: 'fantasma' });
+  const r = await tools.handle('design_comments', {}, ctxOf(host));
+  const t = textOf(r);
+  assert.ok(!r.isError);
+  assert.match(t, new RegExp(`#${ok} \\[aberto\\] a ${code.replace('@', '@')}`));
+  assert.match(t, /mais largo/);
+  assert.match(t, /antes de editar: design_ref @n/);
+  assert.match(t, /components\/NavItem\.html/);
+  assert.match(t, /desconhecido/);
+  fs.writeFileSync(path.join(dir, 'boards', 'a.html'), '<p>outro</p>\n<nav>\n  <x-nav-item label="Início"></x-nav-item>\n</nav>');
+  assert.match(textOf(await tools.handle('design_comments', {}, ctxOf(host))), /vencido|stale/i);
+  await tools.handle('design_comment_reply', { id: ok, text: 'feito', done: true }, ctxOf(host));
+  assert.ok(!/mais largo/.test(textOf(await tools.handle('design_comments', { status: 'aberto' }, ctxOf(host)))));
+  assert.match(textOf(await tools.handle('design_comments', { status: 'feito' }, ctxOf(host))), /mais largo[\s\S]*claude: feito/);
+});
+
+test('design_comments with none says so; design_comment_reply on unknown id is an error', async () => {
+  const { host } = await refCanvas();
+  assert.match(textOf(await tools.handle('design_comments', {}, ctxOf(host))), /nenhum comentário/i);
+  const r = await tools.handle('design_comment_reply', { id: 42, text: 'x', done: false }, ctxOf(host));
+  assert.strictEqual(r.isError, true);
+  assert.strictEqual(textOf(r), 'Comentário 42 não existe');
+});
+
+test('guide: comments section says design_ref before editing; output hints it', () => {
+  const g = fs.readFileSync(path.join(__dirname, '..', 'lib', 'guide.md'), 'utf8');
+  const sec = g.slice(g.indexOf('## Comentários'));
+  assert.match(sec, /design_comments[\s\S]*design_ref[\s\S]*depois edite[\s\S]*design_comment_reply/);
+});
+
+test('design_comment_reply rejects empty text; corrupt comments.json is not overwritten', async () => {
+  const { host, dir } = await refCanvas();
+  const id = commentsMod.open(dir).add({ board: 'a', code: '@n1', text: 'x' });
+  const r = await tools.handle('design_comment_reply', { id, text: '  ', done: true }, ctxOf(host));
+  assert.strictEqual(r.isError, true);
+  assert.match(textOf(r), /vazio/);
+  fs.writeFileSync(path.join(dir, 'comments.json'), '{oops');
+  const r2 = await tools.handle('design_comment_reply', { id, text: 'ok', done: true }, ctxOf(host));
+  assert.strictEqual(r2.isError, true);
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'comments.json'), 'utf8'), '{oops');
+});
+
+test('design_comment_reply redraws the open canvas of that folder (its pin changes)', async () => {
+  const { host, dir } = await refCanvas();
+  const changed = [];
+  host.commentsChanged = (d) => changed.push(d);
+  const id = commentsMod.open(dir).add({ board: 'a', code: '@n1', text: 'x' });
+  await tools.handle('design_comment_reply', { id, text: 'feito', done: true }, ctxOf(host));
+  assert.deepStrictEqual(changed.map((d) => path.resolve(d)), [path.resolve(dir)]);
+  await tools.handle('design_comment_reply', { id: 999, text: 'x', done: true }, ctxOf(host));
+  assert.strictEqual(changed.length, 1, 'a failed reply redraws nothing');
 });

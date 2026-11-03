@@ -18,6 +18,8 @@
 // `data.hits` são as áreas clicáveis do nível atual e `data.selections` a borda
 // do selecionado (px do canvas, nas duas cópias no modo "ambos"); sem eles, a v1.
 //
+// `data.pins` são os pinos dos comentários (comments.json), por cima de tudo.
+//
 // `data.picture` diz se a Maestria tem o `Picture` (que lê da pasta de dados
 // do plugin); sem ele, as imagens vêm por `Sprite` (cópias na pasta do plugin).
 
@@ -129,6 +131,8 @@ widget Layers = Stack(
     // on top: the clickable nodes of the current level
     ...for h in data.hits:
       Hit(h: h),
+    ...for p in data.pins:
+      Pin(p: p),
   ],
 );
 
@@ -148,6 +152,38 @@ widget Hit = Positioned(
     onMenu: event "act" {},
     hoverColor: 0x183B82F6,
     child: SizedBox(width: args.h.width, height: args.h.height),
+  ),
+);
+
+// Um comentário: um pino redondo no canto superior direito do elemento (o
+// tamanho já dividido pela escala, como a seleção). Aberto = cor de destaque
+// com o número; feito = verde com ✓. Passar o mouse mostra o texto e as
+// respostas; o botão direito responde, edita ou apaga ("reply:<id>",
+// "edit:<id>", "delete:<id>").
+widget Pin = Positioned(
+  start: args.p.left,
+  top: args.p.top,
+  width: args.p.size,
+  height: args.p.size,
+  child: Tooltip(
+    message: args.p.tooltip,
+    child: Pressable(
+      color: switch args.p.done { true: data.theme.green, default: data.theme.accent },
+      radius: args.p.radius,
+      menu: args.p.menu,
+      onMenu: event "act" {},
+      child: SizedBox(
+        width: args.p.size,
+        height: args.p.size,
+        child: Center(
+          child: Text(
+            text: args.p.label,
+            maxLines: 1,
+            style: { fontSize: args.p.fontSize, fontWeight: "w600", color: switch args.p.done { true: 0xFFFFFFFF, default: data.theme.onAccent } },
+          ),
+        ),
+      ),
+    ),
   ),
 );
 

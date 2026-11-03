@@ -196,17 +196,32 @@ class Refs {
 
   // -> { board, file, path, line, tag, kind, call, snippet, componentFile?, usedIn, via }
   //  | { stale: true } | { unknown: true }
-  resolve(code, canvasDir = this.canvasDir) {
+  // { e, o, sites } while the code's element and its call sites still match
+  // their fingerprints; 'unknown' / 'stale' otherwise.
+  check(code, canvasDir) {
     const e = this.entry(code);
-    if (!e) return { unknown: true };
+    if (!e) return 'unknown';
     const o = at(canvasDir, e.file, e.path);
-    if (!o || !e.fp || o.fp !== e.fp) return { stale: true };
+    if (!o || !e.fp || o.fp !== e.fp) return 'stale';
     const sites = [];
     for (let i = 0; i < e.via.length; i++) {
       const v = at(canvasDir, e.via[i].file, e.via[i].path);
-      if (!v || !v.fp || v.fp !== e.viaFp[i]) return { stale: true };
+      if (!v || !v.fp || v.fp !== e.viaFp[i]) return 'stale';
       sites.push(v);
     }
+    return { e, o, sites };
+  }
+
+  // The entry of a code that still points at its element (for locate), or null.
+  current(code, canvasDir = this.canvasDir) {
+    const c = this.check(code, canvasDir);
+    return typeof c === 'string' ? null : c.e;
+  }
+
+  resolve(code, canvasDir = this.canvasDir) {
+    const c = this.check(code, canvasDir);
+    if (typeof c === 'string') return { [c]: true };
+    const { e, o, sites } = c;
     const out = { board: e.board, file: e.file, path: e.path, line: o.line, tag: o.tag, kind: e.kind, snippet: o.text, call: null, usedIn: [], via: e.via };
     let componentFile = null;
     if (e.kind === 'component') {

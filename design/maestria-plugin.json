@@ -1,7 +1,7 @@
 {
   "id": "maestria.design",
   "name": "Design",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Um canvas de telas ao lado da sessão: o Claude escreve HTML com o Tailwind do projeto e o plugin mostra cada tela renderizada, no claro e no escuro.",
   "author": "Arthur Fonseca",
   "maestria": 1,
@@ -18,6 +18,8 @@
     "onTool:design_focus",
     "onTool:design_list",
     "onTool:design_ref",
+    "onTool:design_comments",
+    "onTool:design_comment_reply",
     "onHook:PreToolUse"
   ],
   "permissions": [
@@ -175,6 +177,58 @@
           },
           "required": [
             "ref"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "design_comments",
+        "description": "List the comments the user left on canvas elements (default: open ones) with board, code, text, replies and, for each element, where to edit (file:line, component) or that its code is stale/unknown. Use it when asked to \"do the comments\".",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "aberto",
+                "feito",
+                "todos"
+              ],
+              "description": "Default: aberto."
+            },
+            "canvas": {
+              "type": "string",
+              "description": "Canvas folder (absolute, ~/ or relative to the session cwd). Omit to use the canvas last opened in this session."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "design_comment_reply",
+        "description": "Reply to a comment saying what you changed. done: true marks it feito; use done: false (comment stays aberto) when in doubt or unable to do it.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer",
+              "description": "Comment number from design_comments."
+            },
+            "text": {
+              "type": "string"
+            },
+            "done": {
+              "type": "boolean"
+            },
+            "canvas": {
+              "type": "string",
+              "description": "Canvas folder (absolute, ~/ or relative to the session cwd). Omit to use the canvas last opened in this session."
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "done"
           ],
           "additionalProperties": false
         }
