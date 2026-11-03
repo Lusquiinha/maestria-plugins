@@ -106,11 +106,13 @@ test('init reads darkMode textually', () => {
   }
 });
 
-test('init leaves no folder behind when the repo has no tailwind', () => {
-  const repo = tmp(); // no node_modules/.bin/tailwindcss
-  const dir = path.join(tmp(), 'half');
-  assert.throws(() => canvas.init(dir, { repo }), /o projeto não tem tailwind/);
-  assert.ok(!fs.existsSync(dir), 'nothing created');
+test('init makes a canvas for a repo without tailwind, dark mode by the dark class', () => {
+  const repo = tmp();
+  const dir = path.join(tmp(), 'plain');
+  canvas.init(dir, { repo });
+  const design = JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8'));
+  assert.deepStrictEqual(design.darkMode, { class: 'dark' });
+  assert.ok(fs.existsSync(path.join(dir, 'boards')));
 });
 
 test('init lists the stylesheets that define the css variables the config reads', () => {

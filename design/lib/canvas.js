@@ -95,6 +95,22 @@ function gitRoot(cwd) {
   } catch { return cwd; }
 }
 
+function childRepos(dir) {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && fs.existsSync(path.join(dir, e.name, '.git')))
+      .map((e) => e.name)
+      .sort();
+  } catch { return []; }
+}
+
+function insideRepo(dir) {
+  try {
+    execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: dir, stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+}
+
 function defaultDir({ cwd, name, home = os.homedir() }) {
   if (!validName(name)) {
     throw new Error(`nome de canvas inválido: "${name}" — use letras minúsculas, números, - e _`);
@@ -126,8 +142,6 @@ function init(dir, { repo }) {
   const created = !fs.existsSync(file);
   const designFile = path.join(dir, 'design.json');
   const needDesign = !fs.existsSync(designFile);
-  // before any file: a repo without tailwind leaves no half-made canvas behind
-  if (needDesign) project.detect(repo);
   fs.mkdirSync(path.join(dir, 'boards'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'components'), { recursive: true });
   if (created) write(dir, { v: 1, title: path.basename(dir), boards: {}, order: [] });
@@ -164,4 +178,4 @@ function list({ home = os.homedir(), last = {} } = {}) {
     .sort((a, b) => b.lastUsed - a.lastUsed || a.name.localeCompare(b.name) || a.dir.localeCompare(b.dir));
 }
 
-module.exports = { read, write, upsertBoard, resolveDir, defaultDir, init, validName, gitRoot, list };
+module.exports = { read, write, upsertBoard, resolveDir, defaultDir, init, validName, gitRoot, childRepos, insideRepo, list };

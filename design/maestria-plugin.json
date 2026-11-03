@@ -1,8 +1,8 @@
 {
   "id": "maestria.design",
   "name": "Design",
-  "version": "0.2.0",
-  "description": "Um canvas de telas ao lado da sessão: o Claude escreve HTML com o Tailwind do projeto e o plugin mostra cada tela renderizada, no claro e no escuro.",
+  "version": "0.3.0",
+  "description": "Um canvas de telas ao lado da sessão: o Claude escreve HTML com Tailwind e o plugin mostra cada tela renderizada, no claro e no escuro. Usa o tema do projeto quando ele tem um; sem, um Tailwind próprio.",
   "author": "Arthur Fonseca",
   "maestria": 1,
   "icon": "icons/design.svg",
@@ -48,6 +48,10 @@
             "name": {
               "type": "string",
               "description": "New canvas name when no folder is given: lowercase letters, digits, - and _."
+            },
+            "repo": {
+              "type": "string",
+              "description": "Repository this design is for (absolute, ~/ or relative to the session cwd): its Tailwind theme and colors style the boards. Omit to use the session's repo; pass it when the session folder holds several repos. A repo without Tailwind gets the default palette."
             }
           },
           "additionalProperties": false

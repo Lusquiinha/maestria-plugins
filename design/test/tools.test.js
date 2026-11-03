@@ -445,3 +445,39 @@ test('design_comment_reply redraws the open canvas of that folder (its pin chang
   await tools.handle('design_comment_reply', { id: 999, text: 'x', done: true }, ctxOf(host));
   assert.strictEqual(changed.length, 1, 'a failed reply redraws nothing');
 });
+
+const mono = path.join(home, 'mono');
+for (const r of ['admin', 'api']) fs.mkdirSync(path.join(mono, r, '.git'), { recursive: true });
+fs.mkdirSync(path.join(mono, 'admin', 'src', 'app'), { recursive: true });
+fs.writeFileSync(path.join(mono, 'admin', 'src', 'app', 'globals.css'),
+  '@import "tailwindcss";\n@import "tw-animate-css";\n@theme inline {\n  --color-ink: #111;\n  --color-brand-500: #00f;\n}\n');
+
+test('design_open in a folder of several repos asks which one, naming them', async () => {
+  const host = fakeHost();
+  const r = await tools.handle('design_open', { name: 'tela' }, ctxOf(host, { cwd: mono }));
+  assert.strictEqual(r.isError, true);
+  assert.match(textOf(r), /vários repositórios \(admin, api\).*`repo`/);
+  assert.strictEqual(host.calls.length, 0);
+});
+
+test('design_open with repo builds the canvas next to that repo and lists its v4 theme colors', async () => {
+  const host = fakeHost();
+  const r = await tools.handle('design_open', { name: 'painel', repo: 'admin' }, ctxOf(host, { cwd: mono }));
+  assert.ok(!r.isError, textOf(r));
+  const dir = path.join(mono, 'design', 'painel');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8')).repo, path.join(mono, 'admin'));
+  assert.match(textOf(r), /cores do tailwind do projeto: ink, brand/);
+});
+
+test('design_open for a repo without tailwind points to the default palette', async () => {
+  const host = fakeHost();
+  const r = await tools.handle('design_open', { name: 'rust', repo: 'api' }, ctxOf(host, { cwd: mono }));
+  assert.ok(!r.isError, textOf(r));
+  assert.match(textOf(r), /o projeto não tem tailwind; use a paleta padrão do Tailwind v4/);
+});
+
+test('the portable entry keeps the theme, drops package imports and plugins, and pins relative imports', () => {
+  const css = '@import "tailwindcss";\n@import "tw-animate-css";\n@plugin "@tailwindcss/typography";\n@import "./tokens.css";\n@theme { --color-ink: #111; }\n';
+  const out = project.portableEntry(css, '/repo/src/app');
+  assert.strictEqual(out, '@import "tailwindcss";\n@import "/repo/src/app/tokens.css";\n@theme { --color-ink: #111; }\n');
+});
