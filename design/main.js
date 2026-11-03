@@ -5,9 +5,12 @@
 // Chrome e um Tailwind); fechar a janela fecha o motor. Nunca escreva no
 // stdout: é o protocolo.
 //
-// Pra Task 11 (ferramentas MCP): `openCanvas(dir, { tabId, cwd })` abre ou traz
-// pra frente o canvas ao lado da sessão; `focusBoard(viewOrDir, name)` foca uma
+// Pra as ferramentas MCP: `openCanvas(dir, { tabId, cwd })` abre ou traz pra
+// frente o canvas ao lado da sessão; `focusBoard(viewOrDir, name)` foca uma
 // prancheta; `viewOf(dir)` devolve a janela aberta (com `.engine`).
+// O comando `abrir` e a aba Design da lateral funcionam sem sessão em foco:
+// escolhem um canvas e, sem um claude ao lado, abrem um no repo do canvas. Um
+// canvas novo nasce pedindo ao Claude (design_open), nunca por aqui.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -19,9 +22,15 @@ const engineMod = require('./lib/engine');
 const view = require('./lib/view');
 const follow = require('./lib/follow');
 const tools = require('./lib/tools');
+const scanner = require('./lib/scanner');
+const sweep = require('./lib/sweep');
+const refs = require('./lib/refs');
+const sidebar = require('./lib/sidebar');
 
 const PLUGIN_ID = 'maestria.design';
 const UI_FILE = path.join(__dirname, 'ui', 'canvas.rfwtxt');
+const SIDEBAR_FILE = path.join(__dirname, 'ui', 'sidebar.rfwtxt');
+const SIDEBAR = 'sidebar';
 const HIGHLIGHT_MS = 3000;
 const CLOSE_GRACE_MS = 600; // the host SIGTERMs 0.8 s after `shutdown`
 // The host only tells about closed modals (view.closed), not closed grid tabs:
@@ -29,22 +38,30 @@ const CLOSE_GRACE_MS = 600; // the host SIGTERMs 0.8 s after `shutdown`
 const PROBE_MS = Number(process.env.MAESTRIA_DESIGN_PROBE_MS) > 0 ? Number(process.env.MAESTRIA_DESIGN_PROBE_MS) : 5000;
 
 const OUTDATED = [
-  { type: 'heading', text: 'este maestria não desenha o canvas do design' },
-  { type: 'text', text: 'o canvas precisa de uma versão do maestria com widgets (rfw). atualize o app e abra de novo.' },
+  { type: 'heading', text: 'Este Maestria não desenha o canvas do Design' },
+  { type: 'text', text: 'O canvas precisa de uma versão do Maestria com widgets (rfw). Atualize o app e abra de novo.' },
 ];
 
 const state = {
-  caps: { rfw: false, picture: 0, zoomFocus: 0 },
+  caps: { rfw: false, picture: 0, zoomFocus: 0, zoomPan: 0, keyListener: 0 },
   pluginDir: __dirname,
   dataDir: process.env.MAESTRIA_PLUGIN_DATA || path.join(os.homedir(), '.maestria-rs', 'plugin-data', PLUGIN_ID),
+  home: os.homedir(), // where `abrir` and the sidebar look for canvases (Desktop/Work/*/design/*)
   views: new Map(), // viewId -> V
-  current: null, // the canvas the user touched last (for `ajustar`)
-  last: { byTab: {}, byCwd: {} }, // the last canvas opened per session / cwd
+  // the last canvas opened per session / cwd, and when each canvas was last opened (ms)
+  last: { byTab: {}, byCwd: {}, usedAt: {} },
   engines: new Set(), // engines not yet closed (killed on exit, even mid-close)
   pending: new Map(), // engine dataDir -> engineMod.open() still in flight
   probe: null, // the timer of the closed-tab probe
+  sidebarShown: false, // the Design tab is the live sidebar tab
+  sidebarLibrarySent: false,
   exiting: false,
 };
+
+// the blue band over what Claude is editing; a timed-out scan redraws its canvas
+const scans = scanner.create({ onChange: (dir) => { const V = viewOf(dir); if (V) render(V); } });
+
+const OPENING = 'Abrindo o canvas…';
 
 const errText = (e) => String((e && e.message) || e);
 const hashOf = (dir) => crypto.createHash('sha1').update(path.resolve(dir)).digest('hex').slice(0, 12);
@@ -63,17 +80,20 @@ const lastFile = () => path.join(state.dataDir, 'last.json');
 function loadLast() {
   try {
     const j = JSON.parse(fs.readFileSync(lastFile(), 'utf8'));
-    state.last = { byTab: j.byTab || {}, byCwd: j.byCwd || {} };
+    state.last = { byTab: j.byTab || {}, byCwd: j.byCwd || {}, usedAt: j.usedAt || {} };
   } catch { /* first run */ }
 }
 
 function remember(dir, { tabId, cwd } = {}) {
-  if (tabId) state.last.byTab[tabId] = dir;
+  if (tabId) { delete state.last.byTab[tabId]; state.last.byTab[tabId] = dir; } // key order = most recent link last
   if (cwd) state.last.byCwd[cwd] = dir;
+  if (!state.last.usedAt) state.last.usedAt = {};
+  state.last.usedAt[dir] = Date.now();
   try {
     fs.mkdirSync(state.dataDir, { recursive: true });
     fs.writeFileSync(lastFile(), `${JSON.stringify(state.last, null, 2)}\n`);
   } catch (e) { mx.log('last.json:', errText(e)); }
+  pushSidebar();
 }
 
 function lastFor({ tabId, cwd }) {
@@ -83,8 +103,22 @@ function lastFor({ tabId, cwd }) {
 
 // --- a janela -----------------------------------------------------------------------
 
+// The nodes tree of a board (lib/nodes, written by the engine with each
+// render), cached until the board renders again; null before the first one.
+function nodesOf(V, name) {
+  if (V.nodes.has(name)) return V.nodes.get(name);
+  let tree = null;
+  try { tree = JSON.parse(fs.readFileSync(path.join(dataDirOf(V.dir), 'nodes', `${name}.json`), 'utf8')); } catch { /* not rendered yet */ }
+  if (tree) V.nodes.set(name, tree);
+  return tree;
+}
+
 function data(V) {
-  const d = view.build({ canvas: V.canvas, states: V.states, ui: V.ui, caps: state.caps, hash: V.hash });
+  const nodes = new Map();
+  if (state.caps.zoomPan && state.caps.keyListener && V.canvas) {
+    for (const name of V.canvas.order || []) { const t = nodesOf(V, name); if (t) nodes.set(name, t); }
+  }
+  const d = view.build({ canvas: V.canvas, states: V.states, ui: V.ui, caps: state.caps, hash: V.hash, scans: scans.active(V.dir), nodes });
   return view.wire(d);
 }
 
@@ -112,8 +146,8 @@ function command(V, cmd) {
 
 function focusBoard(target, name) {
   const V = typeof target === 'string' ? viewOf(target) : target;
-  if (!V) throw new Error('o canvas não está aberto');
-  if (!V.canvas || !Object.prototype.hasOwnProperty.call(V.canvas.boards, name)) throw new Error(`prancheta não existe: ${name}`);
+  if (!V) throw new Error('O canvas não está aberto');
+  if (!V.canvas || !Object.prototype.hasOwnProperty.call(V.canvas.boards, name)) throw new Error(`A tela "${name}" não existe`);
   return command(V, { kind: 'focus', board: name });
 }
 
@@ -128,6 +162,11 @@ function highlight(V, name) {
 }
 
 function onBoard(V, name, s) {
+  scans.end(name, V.dir); // the new image is here: the scan over it stops
+  // new boxes: node ids of the old render mean nothing now
+  V.nodes.delete(name);
+  if (V.ui.sel && V.ui.sel.board === name) V.ui.sel = null;
+  if (V.ui.level && V.ui.level.board === name) V.ui.level = null;
   if (s) V.states.set(name, s);
   else V.states.delete(name);
   // the first render of the boards that were there at open is not news
@@ -145,21 +184,20 @@ async function openCanvas(input, { tabId, cwd } = {}) {
   if (tabId) await mx.request('session.focus', { tabId }).catch((e) => mx.log('session.focus:', errText(e)));
   const viewId = viewIdOf(dir);
   if (!state.caps.rfw) {
-    await mx.request('view.open', { viewId, title: 'Design', blocks: OUTDATED });
+    await mx.request('view.open', { viewId, title: sidebar.viewTitle(''), blocks: OUTDATED });
     return null;
   }
   remember(dir, { tabId, cwd });
-  state.current = viewId;
   const open = state.views.get(viewId);
   if (open) {
     if (open.failed) { // the last open failed (no design.json, chrome missing…): try again
       open.failed = false;
-      open.ui.message = 'abrindo o canvas…';
+      open.ui.message = OPENING;
       open.ready = startEngine(open);
     } else if (open.engine && open.engine.chromeError) { // chrome gave up for good: a fresh engine
       const old = open.engine;
       open.engine = null;
-      open.ui.message = 'abrindo o canvas…';
+      open.ui.message = OPENING;
       open.ready = closeEngine(old).then(() => startEngine(open));
     }
     await mx.request('view.open', { viewId, title: open.title, rfw: { library: library(), root: 'root' }, data: data(open) });
@@ -172,13 +210,16 @@ async function openCanvas(input, { tabId, cwd } = {}) {
     viewId,
     dir,
     hash: hashOf(dir),
-    title: `design: ${canvas.title}`,
+    title: sidebar.viewTitle(canvas.title),
     canvas,
     states: new Map(),
-    ui: { theme: 'both', follow: true, highlight: null, command: null, rev: 0, scale: 1, message: 'abrindo o canvas…' },
+    ui: { theme: 'both', follow: true, highlight: null, command: null, rev: 0, message: OPENING, sel: null, level: null, scale: 1, fit: 1 },
+    nodes: new Map(), // board -> nodes tree (selection)
     engine: null,
     fresh: new Set(),
     lastUserMove: 0,
+    lastTap: null, // { at, sel, level } before the last selecting tap
+    lastMoveAt: 0, // the user's last pan or wheel (onMove): a tap right after it is the pan's end
     lastCommand: 0,
     highlightTimer: null,
     closed: false,
@@ -210,7 +251,7 @@ async function startEngine(V) {
   } catch (e) {
     if (state.pending.get(dataDir) === opening) state.pending.delete(dataDir);
     mx.log(`abrir ${V.dir}:`, errText(e));
-    V.ui.message = `não abriu: ${errText(e)}`;
+    V.ui.message = `Não abriu: ${errText(e)}`;
     V.failed = true;
     await render(V);
     return;
@@ -220,11 +261,11 @@ async function startEngine(V) {
   if (V.closed || state.exiting) { await closeEngine(eng); return; }
   V.engine = eng;
   V.canvas = eng.canvas;
-  V.title = `design: ${eng.canvas.title}`;
+  V.title = sidebar.viewTitle(eng.canvas.title);
   V.fresh = new Set(eng.renderable());
   V.ui.message = '';
   eng.on('board', (name, s) => onBoard(V, name, s));
-  eng.on('canvas', (c) => { V.canvas = c; V.title = `design: ${c.title}`; render(V); });
+  eng.on('canvas', (c) => { V.canvas = c; V.title = sidebar.viewTitle(c.title); render(V); });
   await render(V);
 }
 
@@ -235,8 +276,9 @@ async function closeView(viewId) {
   if (!state.views.size) stopProbe();
   V.closed = true;
   clearTimeout(V.highlightTimer);
-  if (state.current === viewId) state.current = null;
+  scans.clear(V.dir);
   if (!state.caps.picture) { try { view.clearSprites({ pluginDir: state.pluginDir, hash: V.hash }); } catch { /* best effort */ } }
+  pushSidebar();
   if (V.engine) await closeEngine(V.engine);
 }
 
@@ -267,27 +309,137 @@ async function probeViews() {
 
 // --- as ações da janela ---------------------------------------------------------------
 
-async function onAction(V, act, values) {
-  state.current = V.viewId;
+// "<board>:<k>" -> { board, k } of a node that exists, or null.
+function nodeArg(V, arg) {
+  const j = arg.lastIndexOf(':');
+  const board = arg.slice(0, j);
+  const k = Number(arg.slice(j + 1));
+  if (j <= 0 || !Number.isInteger(k)) return null;
+  const node = view.findNode(nodesOf(V, board), k);
+  return node ? { board, k, node } : null;
+}
+
+function clearSelection(V) {
+  if (!V.ui.sel && !V.ui.level) return null;
+  V.ui.sel = null;
+  V.ui.level = null;
+  return render(V);
+}
+
+// Ctrl+C: the short code of the selected node to the clipboard.
+async function copySelection(V) {
+  const sel = V.ui.sel;
+  const tree = sel && nodesOf(V, sel.board);
+  const node = tree && view.findNode(tree, sel.k);
+  if (!node) return;
+  let code;
+  try {
+    code = refs.open(dataDirOf(V.dir), V.dir).codeFor(sel.board, { ...node, via: refs.viaOf(tree.roots, node.k) });
+  } catch (e) {
+    return banner(errText(e));
+  }
+  await mx.request('clipboard.write', { text: code });
+  banner(`Código ${code} copiado`);
+}
+
+const TAP_AFTER_MOVE_MS = 250;
+
+// The zoom scale and the app's fit factor (onZoom/onMove extras; fit is 1 on
+// apps that do not send it), so the selection chrome keeps its size on screen;
+// redraws only when something selected has to follow them.
+function zoomOf(V, vals) {
+  const s = Number(vals.scale);
+  const f = Number(vals.fit);
+  const scale = s > 0 ? s : V.ui.scale;
+  const fit = f > 0 ? f : 1;
+  const changed = scale !== V.ui.scale || fit !== V.ui.fit;
+  V.ui.scale = scale;
+  V.ui.fit = fit;
+  return changed;
+}
+function rescale(V, vals) {
+  return zoomOf(V, vals) && V.ui.sel ? render(V) : null;
+}
+
+const KEY_ZOOM = { 'ctrl+0': 'fit', 'ctrl+=': 'in', 'ctrl+-': 'out' };
+
+async function onAction(V, act, vals = {}) {
   const i = act.indexOf(':');
   const verb = i < 0 ? act : act.slice(0, i);
   const arg = i < 0 ? '' : act.slice(i + 1);
   const now = Date.now();
-  // the user's own navigation (buttons, double-click, the board list): follow backs off
+  // The click that ends a pan (Space+left-drag) is not a selection. onMove
+  // comes 200 ms after the pan settles, so it can arrive before the click
+  // (dropped here) or just after it (the click is undone on `move`).
+  if (['sel', 'in', 'child', 'clear'].includes(verb)) {
+    if (now - V.lastMoveAt < TAP_AFTER_MOVE_MS) return null;
+    V.lastTap = { at: now, sel: V.ui.sel, level: V.ui.level };
+  }
+  if (act === 'clear') return clearSelection(V);
+  if (verb === 'sel' || verb === 'in' || verb === 'child') {
+    const hit = nodeArg(V, arg);
+    if (!hit) return null;
+    // a node on another board than the opened level sits at that board's top
+    if (V.ui.level && V.ui.level.board !== hit.board) V.ui.level = null;
+    V.ui.sel = { board: hit.board, k: hit.k };
+    // a double click on a child of the selected node (layered over the level)
+    // picks it, and its siblings become the clickable level
+    if (verb === 'child') {
+      const parent = view.parentOf(nodesOf(V, hit.board), hit.k);
+      V.ui.level = parent ? { board: hit.board, k: parent.k } : null;
+    }
+    return render(V);
+  }
+  if (verb === 'rename' && arg) {
+    let canvas;
+    try { canvas = canvasMod.read(V.dir); } catch (e) { return banner(errText(e)); }
+    const b = canvas.boards[arg];
+    if (!b) return null;
+    const current = typeof b.title === 'string' && b.title ? b.title : arg;
+    const name = await mx.request('window.input', { title: 'Renomear tela', placeholder: 'Nome da tela', value: current });
+    const next = typeof name === 'string' ? name.trim() : '';
+    if (!next || next === current) return null;
+    if (next.length > 120) return banner('O nome da tela passa de 120 caracteres');
+    // the dialog may stay open a while: re-read so a concurrent edit survives
+    let fresh;
+    try { fresh = canvasMod.read(V.dir); } catch (e) { return banner(errText(e)); }
+    if (!fresh.boards[arg]) return null;
+    canvasMod.write(V.dir, { ...fresh, boards: { ...fresh.boards, [arg]: { ...fresh.boards[arg], title: next } } });
+    return null; // the engine watches canvas.json and re-renders
+  }
+  if (verb === 'copy') {
+    const hit = nodeArg(V, arg);
+    if (!hit) return null;
+    V.ui.sel = { board: hit.board, k: hit.k };
+    await copySelection(V);
+    return render(V);
+  }
+  if (act === 'key') {
+    const key = String(vals.key || '');
+    if (key === 'ctrl+c') return copySelection(V);
+    if (key === 'escape') return clearSelection(V);
+    if (KEY_ZOOM[key]) { V.lastUserMove = now; return command(V, { kind: KEY_ZOOM[key] }); }
+    return null;
+  }
+  // the user's own navigation (zoom keys, double-click, the board menu): follow backs off
   if (verb === 'zoom' && ['in', 'out', 'fit'].includes(arg)) { V.lastUserMove = now; return command(V, { kind: arg }); }
   if (act === 'zoom') {
     // onZoom also reports the end of our own commands
     if (follow.isUserMove({ now, lastCommand: V.lastCommand })) V.lastUserMove = now;
-    if (typeof values.scale === 'number') V.ui.scale = values.scale;
-    return render(V);
+    return rescale(V, vals);
   }
-  if (act === 'move') {
-    V.lastUserMove = now; // onMove only fires for the user's own pan or wheel
-    if (typeof values.scale === 'number' && Math.abs(values.scale - V.ui.scale) >= 0.005) {
-      V.ui.scale = values.scale;
+  if (act === 'move') { // onMove only fires for the user's own pan or wheel
+    V.lastUserMove = now;
+    V.lastMoveAt = now;
+    const tap = V.lastTap;
+    V.lastTap = null;
+    if (tap && now - tap.at < TAP_AFTER_MOVE_MS) { // that tap ended this pan: undo it
+      V.ui.sel = tap.sel;
+      V.ui.level = tap.level;
+      zoomOf(V, vals);
       return render(V);
     }
-    return null;
+    return rescale(V, vals);
   }
   if (act === 'seguir') { V.ui.follow = !V.ui.follow; return render(V); }
   if (verb === 'tema' && ['light', 'dark', 'both'].includes(arg)) { V.ui.theme = arg; return render(V); }
@@ -298,38 +450,77 @@ async function onAction(V, act, values) {
 
 // --- os comandos ----------------------------------------------------------------------
 
-/** As pastas de canvas em `<empresa>/design/`, pro `design: abrir` sem histórico. */
-function canvasesNear(cwd) {
-  let probe;
-  try { probe = canvasMod.defaultDir({ cwd, name: 'x' }); } catch { probe = null; }
-  if (!probe) return { root: null, dirs: [] };
-  const root = path.dirname(probe);
-  let names = [];
-  try { names = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch { /* none yet */ }
-  const dirs = names.map((n) => path.join(root, n)).filter((d) => fs.existsSync(path.join(d, 'canvas.json')));
-  return { root, dirs };
+const promptFor = (dir) => `Call design_open with canvas="${dir}" and wait for my request.`;
+
+/** O repo do canvas (design.json), pra abrir o claude nele. */
+function repoOf(dir) {
+  try {
+    const repo = JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8')).repo;
+    if (typeof repo === 'string' && repo) return path.resolve(dir, repo);
+  } catch { /* no design.json */ }
+  return null;
 }
+
+/** As sessões do claude vivas (uma hibernada serve), por id. */
+async function liveClaudeTabs() {
+  let list;
+  try { list = await mx.request('sessions.list', {}); } catch (e) { mx.log('sessions.list:', errText(e)); return new Set(); }
+  return new Set((list || []).filter((x) => x && x.kind === 'claude' && !x.exited).map((x) => x.id));
+}
+
+/**
+ * Abre o canvas ao lado de um claude: o do contexto, senão o último ainda aberto
+ * que já estava ligado a este canvas, senão um novo no repo do canvas.
+ */
+async function openWithSession(dir, context) {
+  const { cwd } = context || {};
+  const live = await liveClaudeTabs();
+  const ctxTab = context && context.tabId;
+  if (ctxTab && live.has(ctxTab)) return openCanvas(dir, { tabId: ctxTab, cwd });
+  const linked = Object.keys(state.last.byTab).filter((t) => state.last.byTab[t] === dir).reverse();
+  const tabId = linked.find((t) => live.has(t));
+  if (tabId) return openCanvas(dir, { tabId, cwd });
+  const repo = repoOf(dir) || cwd || path.dirname(dir);
+  const opened = await mx.request('session.openClaude', { cwd: repo, prompt: promptFor(dir) });
+  return openCanvas(dir, { tabId: opened && opened.tabId, cwd: repo });
+}
+
+const canvasList = () => sidebar.canvases({ home: state.home, last: state.last });
 
 async function abrir(context) {
-  const { cwd, tabId } = context || {};
-  const known = lastFor({ tabId, cwd });
-  if (known) return openCanvas(known, { tabId, cwd });
-  const { root, dirs } = canvasesNear(cwd || os.homedir());
-  if (!root) return banner('não sei onde ficam os canvas desta pasta: peça ao claude pra abrir um (design_open)');
-  if (!dirs.length) return banner(`nenhum canvas em ${root}: peça ao claude pra criar um (design_open)`);
-  const dir = dirs.length === 1 ? dirs[0] : await mx.request('window.pick', {
-    title: 'design: abrir',
-    placeholder: 'qual canvas?',
-    items: dirs.map((d) => ({ value: d, label: path.basename(d), detail: d })),
+  const canvases = canvasList();
+  if (!canvases.length) return banner(sidebar.EMPTY_BANNER);
+  const choice = await mx.request('window.pick', {
+    title: 'Abrir canvas de telas',
+    placeholder: 'Qual canvas?',
+    items: sidebar.pickItems(canvases, { home: state.home }),
   });
-  if (!dir) return null;
-  return openCanvas(dir, { tabId, cwd });
+  if (!choice) return null;
+  return openWithSession(choice, context);
 }
 
-function ajustar() {
-  const V = state.views.get(state.current) || [...state.views.values()].pop();
-  if (!V) return banner('nenhum canvas aberto');
-  return command(V, { kind: 'fit' });
+// --- a aba Design na lateral ----------------------------------------------------------
+
+async function pushSidebar() {
+  if (!state.sidebarShown || state.exiting) return;
+  const list = canvasList();
+  const params = state.caps.rfw ? { data: sidebar.data(list) } : { blocks: sidebar.blocks(list) };
+  if (state.caps.rfw && !state.sidebarLibrarySent) params.rfw = { library: fs.readFileSync(SIDEBAR_FILE, 'utf8'), root: 'root' };
+  try {
+    const res = await mx.request('sidebar.update', params);
+    if (params.rfw) state.sidebarLibrarySent = true;
+    if (res && res.shown === false) state.sidebarShown = false;
+  } catch (e) { mx.log('sidebar.update:', errText(e)); }
+}
+
+// A click on a canvas: the same as picking it in `abrir`, beside the focused claude.
+async function sidebarAction(act) {
+  if (!act.startsWith('open:')) return null;
+  const dir = act.slice('open:'.length);
+  if (!canvasList().some((c) => c.dir === dir)) return null;
+  let focused = null;
+  try { focused = await mx.request('sessions.focused', {}); } catch (e) { mx.log('sessions.focused:', errText(e)); }
+  return openWithSession(dir, focused ? { tabId: focused.id, cwd: focused.cwd } : {});
 }
 
 // --- o protocolo ----------------------------------------------------------------------
@@ -339,10 +530,13 @@ mx.onRequest('initialize', (params) => {
     rfw: Number(params.rfw) >= 1,
     picture: Number(params.picture) || 0,
     zoomFocus: Number(params.zoomFocus) || 0,
+    zoomPan: Number(params.zoomPan) || 0,
+    keyListener: Number(params.keyListener) || 0,
   };
   if (params.dataDir) state.dataDir = params.dataDir;
   if (params.pluginDir) state.pluginDir = params.pluginDir;
   loadLast();
+  try { sweep.ensure(state.pluginDir); } catch (e) { mx.log('sweep.png:', errText(e)); }
   return {};
 });
 
@@ -353,31 +547,57 @@ mx.onRequest('command.invoke', ({ command: id, context }) => {
     banner(errText(e));
   });
   if (id === 'abrir') run(() => abrir(context));
-  else if (id === 'ajustar') run(ajustar);
-  else throw new Error(`comando desconhecido: ${id}`);
+  else throw new Error(`Comando desconhecido: ${id}`);
   return null;
 });
 
 // What the MCP tools use from here (so tests of lib/tools can fake it).
-const host = { request: mx.request, openCanvas, viewOf, focusBoard, lastFor };
+const dataDirOf = (dir) => path.join(state.dataDir, hashOf(dir)); // the engine's data dir of a canvas
+const host = { request: mx.request, openCanvas, viewOf, focusBoard, lastFor, dataDirOf, remember };
 
 mx.onRequest('tool.call', ({ tool, args, tabId, cwd }) => tools.handle(tool, args, { tabId, cwd, host }));
 
 mx.onNotification('view.action', async ({ viewId, action, values }) => {
-  const V = state.views.get(viewId);
-  if (!V) return;
   const vals = values || {};
   const act = String(vals.a || vals.action || action || '');
+  const V = state.views.get(viewId);
+  if (!V && viewId !== SIDEBAR) return;
   try {
-    await onAction(V, act, vals);
+    if (V) await onAction(V, act, vals);
+    else await sidebarAction(act);
   } catch (e) {
     mx.log(`ação ${act}:`, errText(e));
     banner(errText(e));
   }
 });
 
+// Hooks from a tab linked to an open canvas (last.json byTab): PreToolUse
+// scans what it edits; PostToolUse(Failure) is the edit's own end.
+const HOOKS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure']);
+
+function onHook(e) {
+  if (!HOOKS.has(e.name)) return;
+  const linkedDir = (tab) => state.last.byTab[tab] || null;
+  const redraw = (dirs) => { for (const dir of new Set(dirs)) { const V = viewOf(dir); if (V) render(V); } };
+  if (e.name !== 'PreToolUse') { redraw(scans.finish(e, { linkedDir })); return; }
+  const canvases = [];
+  for (const V of state.views.values()) {
+    if (V.closed || !V.engine || !V.canvas) continue;
+    canvases.push({ dir: V.dir, boards: V.canvas.order || [], uses: V.engine.uses || new Map() });
+  }
+  if (!canvases.length) return;
+  redraw(scans.onHook({ tabId: e.tabId, payload: e.payload }, { canvases, linkedDir }).map((t) => t.dir));
+}
+
 mx.onNotification('event', (e) => {
-  if (e && e.type === 'view.closed') closeView(e.viewId);
+  if (!e) return;
+  if (e.type === 'view.closed') return closeView(e.viewId);
+  if (e.type === 'sidebar.shown') { state.sidebarShown = true; return pushSidebar(); }
+  if (e.type === 'sidebar.hidden') { state.sidebarShown = false; return null; }
+  if (e.type === 'hook') {
+    try { onHook(e); } catch (err) { mx.log('hook:', errText(err)); }
+  }
+  return null;
 });
 
 // --- sem órfãos: o Chrome e o Tailwind morrem com o plugin ------------------------------
@@ -432,4 +652,4 @@ for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
 
 mx.start();
 
-module.exports = { state, openCanvas, focusBoard, viewOf, hashOf, render, closeView, command };
+module.exports = { state, onAction, abrir, openCanvas, focusBoard, viewOf, hashOf, render, closeView, command, onHook, scans };

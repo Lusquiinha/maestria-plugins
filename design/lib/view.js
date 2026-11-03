@@ -13,11 +13,14 @@ const DEFAULT_H = 800; // a board not rendered yet and without `h`
 const ERROR_H = 56; // the error line under the images (two lines of 16 px)
 const EMPTY = { w: 1200, h: 800 };
 const BORDER = 2; // the highlight border (always drawn, transparent when off)
+const LABEL_H = 24; // the selected node's name, above its rect
 const THEMES = ['both', 'light', 'dark'];
-const THEME_LABEL = { both: 'ambos', light: '☀', dark: '☾' };
+// the chords the canvas listens to (KeyListener), exactly as main.js reads them
+const KEYS = ['ctrl+c', 'escape', 'ctrl+0', 'ctrl+=', 'ctrl+-'];
 
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const num = (n) => typeof n === 'number' && Number.isFinite(n);
+const copyMenu = (board, k) => [{ action: `copy:${board}:${k}`, label: 'Copiar código' }];
 
 function getter(states) {
   if (!states) return () => null;
@@ -46,8 +49,38 @@ function shift(items, pos, size, extra, crossPos, crossSize) {
   });
 }
 
-function build({ canvas, states, ui = {}, caps = {}, hash = '' }) {
+// The node `k` of a nodes tree ({ roots }), or null.
+function findNode(tree, k) {
+  const walk = (list) => {
+    for (const n of list || []) {
+      if (n.k === k) return n;
+      const r = walk(n.children);
+      if (r) return r;
+    }
+    return null;
+  };
+  return tree && k != null ? walk(tree.roots) : null;
+}
+
+// The parent of node `k` (null at the top or when missing).
+function parentOf(tree, k) {
+  const walk = (list, parent) => {
+    for (const n of list || []) {
+      if (n.k === k) return { parent };
+      const r = walk(n.children, n);
+      if (r) return r;
+    }
+    return null;
+  };
+  const r = tree ? walk(tree.roots, null) : null;
+  return r ? r.parent : null;
+}
+
+function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], nodes = null }) {
   const get = getter(states);
+  const getNodes = getter(nodes);
+  // selection needs the app's middle-drag pan and key listener; without them, v1
+  const select = Number(caps.zoomPan) >= 1 && Number(caps.keyListener) >= 1;
   const theme = THEMES.includes(ui.theme) ? ui.theme : 'both';
   const both = theme === 'both';
   const picture = Number(caps.picture) >= 1;
@@ -105,7 +138,68 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '' }) {
     highlight: ui.highlight != null && ui.highlight === it.name,
     rev: (it.s && it.s.rev) || 0,
     focus: `focus:${it.name}`,
+    rename: `rename:${it.name}`,
   }));
+
+  // A rect in image px of board i -> canvas px over each shown copy (both in
+  // "both"), clipped to the image; [] when nothing of it shows.
+  const onImages = (i, r) => {
+    const it = items[i];
+    const x0 = Math.max(0, r.x);
+    const y0 = Math.max(0, r.y);
+    const width = Math.min(it.imgW, r.x + r.w) - x0;
+    const height = Math.min(it.imgH, r.y + r.h) - y0;
+    if (!(width > 0 && height > 0)) return [];
+    const left = out[i].left + BORDER + x0;
+    const top = out[i].top + BORDER + STRIP + y0;
+    const copies = [];
+    if (theme !== 'dark') copies.push({ left, top, width, height });
+    if (theme !== 'light') copies.push({ left: left + (both ? it.imgW + GAP : 0), top, width, height });
+    return copies;
+  };
+
+  // the scanner: over each shown image, clipped to it
+  const scanRects = [];
+  for (const sc of scans || []) {
+    const i = items.findIndex((it) => it.name === sc.board);
+    if (i < 0) continue;
+    scanRects.push(...onImages(i, sc.rect || { x: 0, y: 0, w: items[i].imgW, h: items[i].imgH }));
+  }
+
+  // selection: the clickable nodes of the current level (the children of
+  // ui.level on its board, the top nodes elsewhere) and the selected node
+  const hits = [];
+  const selections = [];
+  if (select) {
+    const level = ui.level || null;
+    items.forEach((it, i) => {
+      const tree = getNodes(it.name);
+      if (!tree) return;
+      const opened = level && level.board === it.name ? findNode(tree, level.k) : null;
+      for (const n of opened ? opened.children || [] : tree.roots || []) {
+        if (!n.rect) continue;
+        for (const c of onImages(i, n.rect)) hits.push({ board: it.name, k: n.k, ...c, tap: `sel:${it.name}:${n.k}`, dbl: `in:${it.name}:${n.k}`, menu: copyMenu(it.name, n.k) });
+      }
+    });
+    const sel = ui.sel || null;
+    const i = sel ? items.findIndex((it) => it.name === sel.board) : -1;
+    const n = i >= 0 ? findNode(getNodes(sel.board), sel.k) : null;
+    if (n && n.rect) {
+      // the selected node's children, over the level (Figma): one click keeps
+      // the parent selected, a double click picks the child under the cursor
+      for (const ch of n.children || []) {
+        if (!ch.rect) continue;
+        for (const c of onImages(i, ch.rect)) hits.push({ board: sel.board, k: ch.k, ...c, tap: `sel:${sel.board}:${n.k}`, dbl: `child:${sel.board}:${ch.k}`, menu: copyMenu(sel.board, ch.k) });
+      }
+      // the chrome keeps its size on screen: canvas px / (zoom scale x the
+      // app's fit factor, 1 on apps that do not send it)
+      const pos = (v) => (num(v) && v > 0 ? v : 1);
+      const scale = pos(ui.scale) * pos(ui.fit);
+      const labelH = LABEL_H / scale;
+      const chrome = { labelH, fontSize: 14 / scale, padX: 6 / scale, padY: 2 / scale, border: 2 / scale };
+      for (const c of onImages(i, n.rect)) selections.push({ ...c, label: String(n.name || ''), labelTop: c.top - labelH, ...chrome });
+    }
+  }
 
   const zoom = { command: '', focus: { x: 0, y: 0, w: 1, h: 1 }, rev: num(ui.rev) ? ui.rev : 0 };
   const cmd = ui.command;
@@ -126,21 +220,34 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '' }) {
     } else zoom.command = 'fit';
   }
 
-  const scale = num(ui.scale) && ui.scale > 0 ? ui.scale : 1;
+  // the one menu of the bar: theme, follow and the boards (zoom is the wheel and the keys);
+  // a section title is a disabled row (an item without action is a divider)
+  const check = (on) => (on ? { icon: 'check' } : {});
+  const section = (label) => ({ action: 'secao', label, disabled: true });
+  const menu = [
+    section('Tema'),
+    { action: 'tema:light', label: 'Claro', ...check(theme === 'light') },
+    { action: 'tema:dark', label: 'Escuro', ...check(theme === 'dark') },
+    { action: 'tema:both', label: 'Claro e escuro lado a lado', ...check(theme === 'both') },
+    { type: 'divider' },
+    { action: 'seguir', label: 'Ir até a tela que o Claude mudou', ...check(!!ui.follow) },
+  ];
+  if (out.length) menu.push({ type: 'divider' }, section('Telas'), ...out.map((b) => ({ action: b.focus, label: b.title, icon: 'layers' })));
+
+  const selectData = select ? { panButtons: ['middle'] } : {};
+  if (selections.length) selectData.selection = selections[0];
   return {
     title: (canvas && canvas.title) || '',
-    zoomLabel: `${Math.round(scale * 100)}%`,
     theme,
-    themeLabel: THEME_LABEL[theme],
-    themeMenu: [
-      { action: 'tema:light', label: '☀ claro' },
-      { action: 'tema:dark', label: '☾ escuro' },
-      { action: 'tema:both', label: 'ambos lado a lado' },
-    ],
     follow: !!ui.follow,
+    menu,
     boards: out,
-    list: out.map((b) => ({ name: b.name, title: b.title })),
-    listMenu: out.map((b) => ({ action: b.focus, label: b.title })),
+    scans: scanRects,
+    select,
+    keys: select ? [...KEYS] : [],
+    hits,
+    selections,
+    ...selectData,
     hasBoards: out.length > 0,
     warnings: ((canvas && canvas.warnings) || []).map(String),
     hasWarnings: !!(canvas && canvas.warnings && canvas.warnings.length),
@@ -153,11 +260,12 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '' }) {
 
 // rfw reads sizes and positions as doubles only, and JSON says `80`, not
 // `80.0`: nudge every whole number off the integer (down, so a fraction of 1
-// stays within 0..1). `rev` keys stay ints (commandRev takes either).
+// stays within 0..1). `rev` keys stay ints (commandRev takes either), and so
+// do node ids (`k`).
 const NUDGE = 1e-9;
 function wire(v, key) {
   if (typeof v === 'number') {
-    if (key === 'rev' || !Number.isInteger(v)) return v;
+    if (key === 'rev' || key === 'k' || !Number.isInteger(v)) return v;
     return v > 0 ? v - NUDGE : v + NUDGE;
   }
   if (Array.isArray(v)) return v.map((x) => wire(x));
@@ -194,4 +302,4 @@ function clearSprites({ pluginDir, hash }) {
   fs.rmSync(path.join(pluginDir, 'cache', hash), { recursive: true, force: true });
 }
 
-module.exports = { build, wire, cacheSprites, clearSprites, picturePath, STRIP, GAP, MARGIN };
+module.exports = { build, wire, findNode, parentOf, KEYS, cacheSprites, clearSprites, picturePath, STRIP, GAP, MARGIN };

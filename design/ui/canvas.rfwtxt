@@ -1,12 +1,22 @@
-// O canvas do Design: a barra em cima e, embaixo, as pranchetas num `ZoomView`
-// (arrastar move, a rodinha aproxima em volta do cursor). Cada prancheta é um
-// `Positioned` na posição do canvas.json (em `data.boards`, já calculada pelo
-// plugin): o nome em cima e as imagens claro e escuro lado a lado.
+// O canvas do Design: a barra em cima (o título e um menu só) e, embaixo, as
+// pranchetas num `ZoomView` (arrastar move, a rodinha aproxima em volta do
+// cursor). Cada prancheta é um `Positioned` na posição do canvas.json (em
+// `data.boards`, já calculada pelo plugin): o nome em cima e as imagens claro e
+// escuro lado a lado.
 //
-// Os cliques voltam como `event "act"` com a ação em `a` (ou em `action`, nos
-// menus): "zoom:in", "zoom:out", "zoom:fit", "seguir", "focus:<nome>",
-// "tema:<light|dark|both>"; o `ZoomView` conta a escala em "zoom" (extra
-// `scale`) e o arrasto do usuário em "move" (extra `scale`, `x`, `y`).
+// Os cliques voltam como `event "act"` com a ação em `a` (ou em `action`, no
+// menu `data.menu`): "seguir", "focus:<nome>", "tema:<light|dark|both>",
+// "sel:<prancheta>:<k>", "in:<prancheta>:<k>", "clear" e "key" (extra `key`,
+// o atalho como em `data.keys`); o
+// `ZoomView` conta a escala em "zoom" (extra `scale`) e o arrasto do usuário em
+// "move" (extra `scale`, `x`, `y`).
+//
+// `data.scans` são os retângulos do scanner (px do canvas, já nas duas cópias
+// no modo "ambos").
+//
+// `data.select` diz se a Maestria tem `panButtons` e `KeyListener`: com eles,
+// `data.hits` são as áreas clicáveis do nível atual e `data.selections` a borda
+// do selecionado (px do canvas, nas duas cópias no modo "ambos"); sem eles, a v1.
 //
 // `data.picture` diz se a Maestria tem o `Picture` (que lê da pasta de dados
 // do plugin); sem ele, as imagens vêm por `Sprite` (cópias na pasta do plugin).
@@ -37,47 +47,8 @@ widget Bar = Container(
       Expanded(
         child: Text(text: data.title, maxLines: 1, overflow: "ellipsis", style: { fontSize: 16.0, fontWeight: "w600", color: data.theme.fg }),
       ),
-      IconButton(icon: "remove", tooltip: "afastar", onPressed: event "act" { a: "zoom:out" }),
-      SizedBox(
-        width: 48.0,
-        child: Text(text: data.zoomLabel, textAlign: "center", style: { fontSize: 14.0, color: data.theme.dim }),
-      ),
-      IconButton(icon: "add", tooltip: "aproximar", onPressed: event "act" { a: "zoom:in" }),
-      SizedBox(width: 4.0),
-      Pressable(
-        radius: 6.0,
-        padding: [10.0, 4.0, 10.0, 4.0],
-        hoverColor: data.theme.hover,
-        onTap: event "act" { a: "zoom:fit" },
-        child: Text(text: "ajustar", style: { fontSize: 16.0, color: data.theme.fg }),
-      ),
-      SizedBox(width: 8.0),
-      Text(text: data.themeLabel, style: { fontSize: 16.0, color: data.theme.fg }),
-      MenuButton(icon: "image", tooltip: "tema: claro, escuro ou os dois lado a lado", menu: data.themeMenu, onMenu: event "act" {}),
-      SizedBox(width: 4.0),
-      Follow(),
-      SizedBox(width: 4.0),
-      MenuButton(icon: "layers", tooltip: "as pranchetas: clique pra ir até uma", menu: data.listMenu, onMenu: event "act" {}),
+      MenuButton(icon: "more", tooltip: "Tema, telas e acompanhar o Claude", menu: data.menu, onMenu: event "act" {}),
     ],
-  ),
-);
-
-widget Follow = Tooltip(
-  message: "quando o claude cria ou muda uma prancheta, o canvas vai até ela (se você não mexeu no canvas há pouco)",
-  child: Pressable(
-    radius: 6.0,
-    padding: [8.0, 4.0, 10.0, 4.0],
-    color: switch data.follow { true: data.theme.active, default: 0x00000000 },
-    hoverColor: data.theme.hover,
-    onTap: event "act" { a: "seguir" },
-    child: Row(
-      mainAxisSize: "min",
-      children: [
-        Glyph(icon: switch data.follow { true: "check", default: "dot" }, size: 14.0, color: switch data.follow { true: data.theme.accent, default: data.theme.faint }),
-        SizedBox(width: 6.0),
-        Text(text: "seguir o claude", style: { fontSize: 16.0, color: switch data.follow { true: data.theme.fg, default: data.theme.dim } }),
-      ],
-    ),
   ),
 );
 
@@ -109,74 +80,157 @@ widget Warnings = switch data.hasWarnings {
 // --- a área -------------------------------------------------------------------------
 
 widget Area = switch data.hasBoards {
-  true: ZoomView(
-    maxScale: 8.0,
-    command: data.zoom.command,
-    commandRev: data.zoom.rev,
-    focus: data.zoom.focus,
-    onZoom: event "act" { a: "zoom" },
-    onMove: event "act" { a: "move" },
-    child: FittedBox(
-      fit: "contain",
-      child: SizedBox(
-        width: data.size.w,
-        height: data.size.h,
-        child: Stack(
-          children: [
-            ...for b in data.boards:
-              Board(b: b),
-          ],
-        ),
-      ),
+  true: switch data.select {
+    true: KeyListener(
+      keys: data.keys,
+      onKey: event "act" { a: "key" },
+      child: Zoom(),
     ),
-  ),
+    default: Zoom(),
+  },
   default: Center(
-    child: Text(text: "nenhuma prancheta ainda: peça ao claude pra desenhar uma", style: { fontSize: 16.0, color: data.theme.dim }),
+    child: Text(text: "Nenhuma tela ainda. Peça ao Claude numa sessão pra desenhar uma.", style: { fontSize: 16.0, color: data.theme.dim }),
   ),
 };
+
+// `panButtons` só vem com a seleção (o clique esquerdo seleciona, a rodinha
+// arrasta); sem ela o campo falta e o arrasto esquerdo da v1 continua.
+widget Zoom = ZoomView(
+  maxScale: 8.0,
+  command: data.zoom.command,
+  commandRev: data.zoom.rev,
+  focus: data.zoom.focus,
+  panButtons: data.panButtons,
+  onZoom: event "act" { a: "zoom" },
+  onMove: event "act" { a: "move" },
+  child: FittedBox(
+    fit: "contain",
+    child: SizedBox(
+      width: data.size.w,
+      height: data.size.h,
+      // com a seleção, um clique no vazio limpa (os nós param o clique deles)
+      child: switch data.select {
+        true: GestureDetector(onTap: event "act" { a: "clear" }, child: Layers()),
+        default: Layers(),
+      },
+    ),
+  ),
+);
+
+widget Layers = Stack(
+  children: [
+    ...for b in data.boards:
+      Board(b: b),
+    // after the boards, so the boards keep their Sprite slots
+    ...for s in data.selections:
+      Selected(s: s),
+    ...for s in data.scans:
+      Scan(s: s),
+    // on top: the clickable nodes of the current level
+    ...for h in data.hits:
+      Hit(h: h),
+  ],
+);
+
+// Um nó clicável: 1 clique seleciona ("sel:<prancheta>:<k>"), 2 cliques
+// também ("in:…"). Os filhos do selecionado vêm por cima: 1 clique mantém o
+// pai, 2 cliques escolhem o filho sob o cursor ("child:<prancheta>:<k>").
+// Transparente, só um tom ao passar.
+widget Hit = Positioned(
+  start: args.h.left,
+  top: args.h.top,
+  width: args.h.width,
+  height: args.h.height,
+  child: Pressable(
+    onTap: event "act" { a: args.h.tap },
+    onDoubleTap: event "act" { a: args.h.dbl },
+    menu: args.h.menu,
+    onMenu: event "act" {},
+    hoverColor: 0x183B82F6,
+    child: SizedBox(width: args.h.width, height: args.h.height),
+  ),
+);
+
+// O selecionado: borda azul e o nome numa faixa logo acima, com tamanhos já
+// divididos pela escala do zoom (o mesmo tamanho na tela em qualquer zoom).
+widget Selected = Positioned(
+  start: args.s.left,
+  top: args.s.labelTop,
+  width: args.s.width,
+  child: Column(
+    mainAxisSize: "min",
+    crossAxisAlignment: "start",
+    children: [
+      SizedBox(
+        height: args.s.labelH,
+        child: Container(
+          color: data.theme.accent,
+          padding: [args.s.padX, args.s.padY, args.s.padX, args.s.padY],
+          child: Text(text: args.s.label, maxLines: 1, style: { fontSize: args.s.fontSize, color: 0xFFFFFFFF }),
+        ),
+      ),
+      Container(
+        width: args.s.width,
+        height: args.s.height,
+        decoration: { type: "box", border: [{ color: data.theme.accent, width: args.s.border }] },
+      ),
+    ],
+  ),
+);
 
 widget Board = Positioned(
   start: args.b.left,
   top: args.b.top,
   width: args.b.frameWidth, // fixed: a long title is cut instead of widening the box
-  child: GestureDetector(
-    onDoubleTap: event "act" { a: args.b.focus },
-    child: Container(
-      decoration: {
-        type: "box",
-        border: [{ color: switch args.b.highlight { true: data.theme.accent, default: 0x00000000 }, width: 2.0 }],
-      },
-      child: Column(
-        mainAxisSize: "min",
-        crossAxisAlignment: "start",
-        children: [
-          SizedBox(
+  child: Container(
+    decoration: {
+      type: "box",
+      border: [{ color: switch args.b.highlight { true: data.theme.accent, default: 0x00000000 }, width: 2.0 }],
+    },
+    child: Column(
+      mainAxisSize: "min",
+      crossAxisAlignment: "start",
+      children: [
+        Pressable(
+          onDoubleTap: event "act" { a: args.b.rename },
+          child: SizedBox(
             height: 28.0,
             child: Text(text: args.b.title, maxLines: 1, overflow: "ellipsis", style: { fontSize: 16.0, color: data.theme.dim }),
           ),
-          Row(
-            mainAxisSize: "min",
-            crossAxisAlignment: "start",
-            children: [
-              switch args.b.showLight { true: Shot(path: args.b.light, w: args.b.imageWidth, h: args.b.imageHeight), default: SizedBox() },
-              switch args.b.gap { true: SizedBox(width: 24.0), default: SizedBox() },
-              switch args.b.showDark { true: Shot(path: args.b.dark, w: args.b.imageWidth, h: args.b.imageHeight), default: SizedBox() },
-            ],
-          ),
-          switch args.b.error {
-            "": SizedBox(),
-            default: SizedBox(
-              height: 56.0,
-              child: Padding(
-                padding: [0.0, 8.0, 0.0, 0.0],
-                child: Text(text: args.b.error, maxLines: 2, overflow: "ellipsis", style: { fontSize: 16.0, color: data.theme.red }),
-              ),
+        ),
+        Row(
+          mainAxisSize: "min",
+          crossAxisAlignment: "start",
+          children: [
+            switch args.b.showLight { true: Shot(path: args.b.light, w: args.b.imageWidth, h: args.b.imageHeight), default: SizedBox() },
+            switch args.b.gap { true: SizedBox(width: 24.0), default: SizedBox() },
+            switch args.b.showDark { true: Shot(path: args.b.dark, w: args.b.imageWidth, h: args.b.imageHeight), default: SizedBox() },
+          ],
+        ),
+        switch args.b.error {
+          "": SizedBox(),
+          default: SizedBox(
+            height: 56.0,
+            child: Padding(
+              padding: [0.0, 8.0, 0.0, 0.0],
+              child: Text(text: args.b.error, maxLines: 2, overflow: "ellipsis", style: { fontSize: 16.0, color: data.theme.red }),
             ),
-          },
-        ],
-      ),
+          ),
+        },
+      ],
     ),
   ),
+);
+
+// O scanner: uma faixa azul descendo sobre o que o claude está editando
+// (sweep.png: 24 quadros lado a lado a 20 fps, uma passada a cada 1,2 s,
+// esticados no retângulo). Só desenha.
+widget Scan = Positioned(
+  start: args.s.left,
+  top: args.s.top,
+  width: args.s.width,
+  height: args.s.height,
+  child: Sprite(sheet: "cache/sweep.png", columns: 24, rows: 1, frames: 24, fps: 20.0, loop: true, width: args.s.width, height: args.s.height),
 );
 
 // Uma imagem da prancheta; antes da primeira renderização, um quadro vazio.

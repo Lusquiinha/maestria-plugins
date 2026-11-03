@@ -2,7 +2,7 @@
   "id": "maestria.design",
   "name": "Design",
   "version": "0.1.0",
-  "description": "Um canvas de pranchetas ao lado da sessão: o Claude escreve HTML com o Tailwind do projeto e o plugin mostra cada prancheta renderizada, no claro e no escuro.",
+  "description": "Um canvas de telas ao lado da sessão: o Claude escreve HTML com o Tailwind do projeto e o plugin mostra cada tela renderizada, no claro e no escuro.",
   "author": "Arthur Fonseca",
   "maestria": 1,
   "icon": "icons/design.svg",
@@ -12,25 +12,26 @@
   ],
   "activationEvents": [
     "onCommand:abrir",
-    "onCommand:ajustar",
     "onTool:design_open",
     "onTool:design_board",
     "onTool:design_render",
     "onTool:design_focus",
-    "onTool:design_list"
+    "onTool:design_list",
+    "onTool:design_ref",
+    "onHook:PreToolUse"
   ],
-  "permissions": [],
+  "permissions": [
+    "sessions.create",
+    "hooks"
+  ],
   "contributes": {
     "commands": [
       {
         "id": "abrir",
-        "title": "design: abrir"
-      },
-      {
-        "id": "ajustar",
-        "title": "design: ajustar"
+        "title": "Design: abrir canvas de telas…"
       }
     ],
+    "sidebar": true,
     "tools": [
       {
         "name": "design_open",
@@ -154,6 +155,27 @@
               "description": "Canvas folder (absolute, ~/ or relative to the session cwd). Omit to use the canvas last opened in this session."
             }
           },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "design_ref",
+        "description": "Resolve a code like @n12 the user pasted from the canvas: returns the board, the exact source to edit (file:line + snippet; for a component, its call site and its file with the boards that use it) and an image of the element. Call it before editing.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string",
+              "description": "The code as pasted, e.g. @n12."
+            },
+            "canvas": {
+              "type": "string",
+              "description": "Canvas folder (absolute, ~/ or relative to the session cwd). Omit to use the canvas last opened in this session."
+            }
+          },
+          "required": [
+            "ref"
+          ],
           "additionalProperties": false
         }
       }

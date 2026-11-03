@@ -168,3 +168,23 @@ test('prototype names are not boards', () => {
   fs.writeFileSync(path.join(dir, 'canvas.json'), JSON.stringify({ ...c, order: ['a', 'toString'] }));
   assert.deepStrictEqual(canvas.read(dir).order, ['a']);
 });
+
+test('list: the canvases under ~/Desktop/Work/*/design/* plus the history, most recent first', () => {
+  const home = tmp();
+  const mk = (d) => { fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'canvas.json'), '{"v":1}'); return d; };
+  const c1 = mk(path.join(home, 'Desktop', 'Work', 'a', 'design', 'c1'));
+  const c2 = mk(path.join(home, 'Desktop', 'Work', 'b', 'design', 'c2'));
+  fs.mkdirSync(path.join(home, 'Desktop', 'Work', 'b', 'design', 'empty'), { recursive: true }); // no canvas.json
+  const elsewhere = mk(path.join(home, 'other', 'elsewhere'));
+  const last = {
+    byTab: { t1: elsewhere, t2: path.join(home, 'gone') },
+    byCwd: { '/x': c2 },
+    usedAt: { [c2]: 50, [elsewhere]: 100, [path.join(home, 'gone')]: 999 },
+  };
+  assert.deepStrictEqual(canvas.list({ home, last }), [
+    { dir: elsewhere, name: 'elsewhere', lastUsed: 100 },
+    { dir: c2, name: 'c2', lastUsed: 50 },
+    { dir: c1, name: 'c1', lastUsed: 0 },
+  ]);
+  assert.deepStrictEqual(canvas.list({ home: tmp() }), []);
+});

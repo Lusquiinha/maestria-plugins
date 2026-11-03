@@ -20,7 +20,14 @@ function host(env = {}) {
   const waiters = [];
   let buf = '';
   let id = 0;
-  const replies = { 'view.open': { tabId: 't9' }, 'view.update': { open: true } };
+  const replies = {
+    'view.open': { tabId: 't9' },
+    'view.update': { open: true },
+    // `design: abrir` lists every canvas: pick the test's own (under the tmp dir)
+    'window.pick': (p) => ((p.items || []).find((i) => i.value.startsWith(os.tmpdir())) || {}).value || null,
+    'sessions.list': [{ id: 't1', kind: 'claude' }],
+    'session.openClaude': { tabId: 't1' },
+  };
   proc.stdout.on('data', (d) => {
     buf += d;
     let i;
@@ -32,7 +39,8 @@ function host(env = {}) {
       msgs.push(m);
       if (m.method && m.id !== undefined) {
         const result = api.reply ? api.reply(m) : undefined;
-        proc.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: m.id, result: result !== undefined ? result : (replies[m.method] ?? null) })}\n`);
+        const dflt = typeof replies[m.method] === 'function' ? replies[m.method](m.params || {}) : replies[m.method];
+        proc.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: m.id, result: result !== undefined ? result : (dflt ?? null) })}\n`);
       }
       if (process.env.DEBUG_SMOKE) console.error(line.length > 2000 ? line.slice(0, 120) + " ... " + line.slice(-400) : line);
       for (const w of [...waiters]) if (w.pred(m)) { waiters.splice(waiters.indexOf(w), 1); clearTimeout(w.t); w.resolve(m); }
@@ -99,10 +107,8 @@ test('answers initialize and exits when stdin closes', async () => {
   try {
     const r = await h.request('initialize', { apiVersion: 1, rfw: 2, dataDir: tmp });
     assert.deepStrictEqual(r.result, {});
-    const c = await h.request('command.invoke', { command: 'ajustar', context: {} });
-    assert.strictEqual(c.result, null);
-    const b = await h.wait((m) => m.method === 'window.showBanner');
-    assert.match(b.params.text, /nenhum canvas aberto/);
+    const c = await h.request('command.invoke', { command: 'ajustar', context: {} }); // gone: zoom is the wheel and the keys
+    assert.match(c.error.message, /Comando desconhecido: ajustar/);
     h.proc.stdin.end();
     assert.strictEqual(await h.exited, 0);
   } finally {
@@ -151,7 +157,7 @@ test('abrir opens the canvas beside the session, renders boards, and leaves no o
     // the user pans: the next save only highlights
     const rev1 = hl.params.data.boards.find((b) => b.name === board.name).rev;
     h.send({ method: 'view.action', params: { viewId: open.params.viewId, action: 'act', values: { a: 'move', scale: 2, x: 10, y: 10 } } });
-    await h.wait((m) => m.method === 'view.update' && m.params.data && m.params.data.zoomLabel === '200%');
+    await sleep(200); // the move only marks the user's navigation (no update)
     const n1 = h.msgs.length;
     fs.writeFileSync(file, src.replace('class="', 'class="[--smoke:2] '));
     const hl2 = await h.wait((m) => h.msgs.indexOf(m) >= n1 && m.method === 'view.update' && m.params.data
@@ -310,6 +316,108 @@ test('design_open focuses the session before opening the view', { skip: skipEngi
     const iOpen = h.msgs.findIndex((m) => m.method === 'view.open');
     assert.ok(iFocus >= 0 && iOpen > iFocus, `session.focus (${iFocus}) before view.open (${iOpen})`);
     assert.deepStrictEqual(h.msgs[iFocus].params, { tabId: 't1' });
+  } finally {
+    cleanup(h, tmp, dataDir);
+  }
+});
+
+test('select on the canvas: tap, double-tap, ctrl+c copies the @n code, escape clears, ctrl+0 fits', { skip: skipEngine, timeout: 45000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'design-main-'));
+  const { dataDir } = makeCanvas(tmp);
+  const h = host();
+  try {
+    await h.request('initialize', { apiVersion: 1, rfw: 2, picture: 1, zoomFocus: 1, zoomPan: 1, keyListener: 1, dataDir });
+    await h.request('command.invoke', { command: 'abrir', context: { cwd: '/x', tabId: 't1' } });
+    const open = await h.wait((m) => m.method === 'view.open');
+    assert.match(open.params.rfw.library, /KeyListener\(/);
+    const upd = await h.wait((m) => m.method === 'view.update' && m.params.data && m.params.data.hits && m.params.data.hits.length, 25000);
+    const d0 = upd.params.data;
+    assert.strictEqual(d0.select, true);
+    assert.deepStrictEqual(d0.panButtons, ['middle']);
+    assert.deepStrictEqual(d0.keys, ['ctrl+c', 'escape', 'ctrl+0', 'ctrl+=', 'ctrl+-']);
+    const act = (values) => h.send({ method: 'view.action', params: { viewId: open.params.viewId, action: 'act', values } });
+    const next = (pred, ms) => { const n0 = h.msgs.length; return h.wait((m) => h.msgs.indexOf(m) >= n0 && pred(m), ms); };
+    const upd2 = (pred) => next((m) => m.method === 'view.update' && m.params.data && pred(m.params.data));
+
+    // ctrl+c with nothing selected copies nothing
+    act({ a: 'key', key: 'ctrl+c' });
+    await sleep(200);
+    assert.ok(!h.msgs.some((m) => m.method === 'clipboard.write'));
+
+    // one tap selects a top node; its children come layered on top of it
+    const hash = open.params.viewId.slice('canvas:'.length);
+    const tree = JSON.parse(fs.readFileSync(path.join(dataDir, hash, 'nodes', `${d0.hits[0].board}.json`), 'utf8'));
+    const parent = tree.roots.find((n) => n.children && n.children.length);
+    assert.ok(parent, 'a top node with children');
+    const top = d0.hits.find((x) => x.k === parent.k);
+    const child = parent.children[0];
+    let p = upd2((d) => d.selections.length > 0);
+    act({ a: top.tap });
+    const s1 = (await p).params.data;
+    assert.strictEqual(s1.selection.label, parent.name);
+    const layered = s1.hits.filter((x) => x.dbl.startsWith('child:'));
+    assert.deepStrictEqual([...new Set(layered.map((x) => x.k))].sort(), parent.children.map((n) => n.k).sort());
+    assert.ok(layered.every((x) => x.tap === `sel:${top.board}:${parent.k}`), 'one click on a child keeps the parent');
+    assert.ok(s1.hits.indexOf(layered[0]) > s1.hits.indexOf(top), 'children above the level');
+    // a double click on the child under the cursor picks it (Figma)
+    const hitOfChild = layered.find((x) => x.k === child.k);
+    p = upd2((d) => d.selection && d.selection.label === child.name);
+    act({ a: hitOfChild.dbl });
+    const inside = (await p).params.data;
+    const ks = new Set(inside.hits.filter((x) => x.board === top.board && x.dbl.startsWith('in:')).map((x) => x.k));
+    assert.deepStrictEqual([...ks].sort(), parent.children.map((n) => n.k).sort(), 'its siblings are the level now');
+    // ctrl+c: clipboard.write with the @n code and a short banner
+    const clip = next((m) => m.method === 'clipboard.write');
+    const ban = next((m) => m.method === 'window.showBanner');
+    act({ a: 'key', key: 'ctrl+c' });
+    const c = await clip;
+    assert.match(c.params.text, /^@n\d+$/);
+    assert.strictEqual((await ban).params.text, `Código ${c.params.text} copiado`);
+    const refs = JSON.parse(fs.readFileSync(path.join(dataDir, hash, 'refs.json'), 'utf8'));
+    const entry = refs.codes[c.params.text.slice(2)];
+    assert.strictEqual(entry.board, top.board);
+    assert.deepStrictEqual(entry.path, child.path);
+
+    // escape clears; a tap on the empty canvas clears too
+    p = upd2((d) => d.selections.length === 0);
+    act({ a: 'key', key: 'escape' });
+    const cleared = (await p).params.data;
+    assert.ok(!('selection' in cleared));
+    assert.deepStrictEqual(cleared.hits.map((x) => x.k), d0.hits.map((x) => x.k), 'back at the top level');
+    p = upd2((d) => d.selections.length > 0);
+    act({ a: top.tap });
+    await p;
+    p = upd2((d) => d.selections.length === 0);
+    act({ a: 'clear' });
+    await p;
+
+    // the zoom keys
+    for (const [key, cmd] of [['ctrl+0', 'fit'], ['ctrl+=', 'in'], ['ctrl+-', 'out']]) {
+      p = upd2((d) => d.zoom.command === cmd);
+      act({ a: 'key', key });
+      await p;
+    }
+    h.proc.stdin.end();
+    assert.strictEqual(await h.exited, 0);
+  } finally {
+    cleanup(h, tmp, dataDir);
+  }
+});
+
+test('an old host (no zoomPan/keyListener): no hits, no keys, no panButtons', { skip: skipEngine, timeout: 45000 }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'design-main-'));
+  const { dataDir } = makeCanvas(tmp);
+  const h = host();
+  try {
+    await h.request('initialize', { apiVersion: 1, rfw: 2, picture: 1, zoomFocus: 1, dataDir });
+    await h.request('command.invoke', { command: 'abrir', context: { cwd: '/x', tabId: 't1' } });
+    const d = (await rendered(h)).params.data;
+    assert.strictEqual(d.select, false);
+    assert.deepStrictEqual(d.hits, []);
+    assert.deepStrictEqual(d.keys, []);
+    assert.ok(!('panButtons' in d));
+    h.proc.stdin.end();
+    assert.strictEqual(await h.exited, 0);
   } finally {
     cleanup(h, tmp, dataDir);
   }
