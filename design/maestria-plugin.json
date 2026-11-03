@@ -1,7 +1,7 @@
 {
   "id": "maestria.design",
   "name": "Design",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Um canvas de telas ao lado da sessão: o Claude escreve HTML com o Tailwind do projeto e o plugin mostra cada tela renderizada, no claro e no escuro.",
   "author": "Arthur Fonseca",
   "maestria": 1,
