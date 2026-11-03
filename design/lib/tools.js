@@ -351,7 +351,7 @@ async function commentsList(args, ctx) {
     if (res.unknown) lines.push('  elemento: código desconhecido neste canvas (avise no comentário em vez de chutar)');
     else if (res.stale) lines.push(`  elemento: ${STALE} (o elemento mudou ou sumiu; avise no comentário em vez de chutar)`);
     else {
-      lines.push(`  elemento <${res.tag || res.name || '?'}>: ${path.join(dir, res.file)}:${res.line}`);
+      lines.push(`  elemento <${res.tag || '?'}>: ${path.join(dir, res.file)}:${res.line}`);
       if (res.call) lines.push(`  instância: ${path.join(dir, res.call.file)}:${res.call.line}`);
       if (res.componentFile) lines.push(`  componente: ${path.join(dir, res.componentFile)} (usado em: ${res.usedIn.join(', ') || 'nenhuma prancheta'})`);
       lines.push(`  antes de editar: design_ref ${c.code}`);

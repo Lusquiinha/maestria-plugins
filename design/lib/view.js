@@ -31,7 +31,7 @@ const pinMenu = (id) => [
   { action: `edit:${id}`, label: 'Editar…' },
   { action: `delete:${id}`, label: 'Apagar comentário' },
 ];
-const AUTHOR = { arthur: 'Arthur', claude: 'Claude' };
+const AUTHOR = { user: 'Você', claude: 'Claude' };
 const pinTooltip = (c) => [`#${c.id} · ${c.text}`, ...(c.replies || []).map((r) => `${AUTHOR[r.author] || r.author}: ${r.text}`)].join('\n');
 
 function getter(states) {

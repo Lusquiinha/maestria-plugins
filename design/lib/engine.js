@@ -56,6 +56,7 @@ class Engine extends EventEmitter {
     this.sources = new Map(); // name -> node sources of the expanded page (components.expand annotate)
     this.started = new Map(); // name -> ms of the first pending change
     this.timers = new Map();
+    this.rendering = new Set(); // names of the job in flight (jobs run one at a time)
     this.watchers = [];
     this.queue = Promise.resolve();
     this.deaths = 0; // chrome deaths since the last good render; one relaunch is allowed
@@ -114,11 +115,20 @@ class Engine extends EventEmitter {
     if (!this.started.has(name)) this.started.set(name, Date.now());
   }
 
+  // A render of the board is pending (a save in its debounce, a queued job) or
+  // in flight: its node map on screen may be about to change.
+  busy(name) {
+    return this.timers.has(`b:${name}`) || this.started.has(name) || this.rendering.has(name);
+  }
+
   schedule(names, { force = false, forClaude = false } = {}) {
     if (this.closed) return Promise.resolve(new Map());
     const list = [...new Set(names)];
     const revs = new Map(list.map((n) => { this.touch(n); return [n, this.revs.get(n)]; }));
-    const job = this.queue.then(() => this._job(revs, force, forClaude));
+    const job = this.queue.then(async () => {
+      for (const n of list) this.rendering.add(n);
+      try { return await this._job(revs, force, forClaude); } finally { for (const n of list) this.rendering.delete(n); }
+    });
     this.queue = job.catch((e) => this.log(`job: ${e.message}`));
     return job;
   }

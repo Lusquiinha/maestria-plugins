@@ -8,6 +8,7 @@ const path = require('node:path');
 const canvasMod = require('./canvas');
 
 const TEXT = 'Para criar um design novo, peça ao Claude numa sessão: "cria uma tela de…"';
+const HEADING = 'Designs feitos';
 const EMPTY_BANNER = 'Nenhum canvas ainda. Peça ao Claude numa sessão: "cria uma tela de…"';
 
 // The canvas repo (design.json `repo`, absolute), or null.
@@ -31,9 +32,10 @@ function canvases({ home = os.homedir(), last = {} } = {}) {
   return canvasMod.list({ home, last }).map((c) => ({ ...c, project: projectOf(c.dir) }));
 }
 
-function data(list) {
-  const items = (list || []).map((c) => ({ name: c.name, project: c.project || '', hasProject: !!c.project, open: `open:${c.dir}` }));
-  return { text: TEXT, canvases: items, hasCanvases: items.length > 0 };
+// `openDirs`: the canvas folders open in a Design view (highlighted, like the open conversation).
+function data(list, { openDirs } = {}) {
+  const items = (list || []).map((c) => ({ name: c.name, project: c.project || '', hasProject: !!c.project, open: `open:${c.dir}`, active: !!(openDirs && openDirs.has(c.dir)) }));
+  return { text: TEXT, heading: HEADING, canvases: items, hasCanvases: items.length > 0 };
 }
 
 function blocks(list) {

@@ -116,7 +116,7 @@ function nodesOf(V, name) {
 
 // The comments of the canvas with the rect of each element: where its code
 // still points now (kept in the store as the last known spot), else the stored one.
-function pinsOf(V) {
+function resolvePins(V) {
   let C;
   let list;
   try {
@@ -139,6 +139,24 @@ function pinsOf(V) {
     } catch (e) { mx.log(`comentário ${c.id}:`, errText(e)); }
     return { ...c, rect };
   });
+}
+
+// What the resolved pins depend on besides the board trees: comments.json and
+// refs.json (codes and their fingerprints), by mtime and size.
+function pinsKey(V) {
+  const stamp = (f) => { try { const s = fs.statSync(f); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } };
+  return `${stamp(path.join(V.dir, 'comments.json'))}|${stamp(path.join(dataDirOf(V.dir), 'refs.json'))}`;
+}
+
+// resolvePins, cached on V until comments.json, refs.json or a commented
+// board's nodes tree changes (or V.pins is dropped): zoom ticks redraw a lot.
+function pinsOf(V) {
+  const c = V.pins;
+  if (c && c.key === pinsKey(V) && [...c.trees].every(([b, t]) => (V.nodes.get(b) || null) === t)) return c.list;
+  const list = resolvePins(V);
+  const trees = new Map(list.map((p) => [p.board, V.nodes.get(p.board) || null]));
+  V.pins = { key: pinsKey(V), trees, list }; // after resolvePins: its place() writes are in the key
+  return list;
 }
 
 function data(V) {
@@ -195,6 +213,7 @@ function onBoard(V, name, s) {
   scans.end(name, V.dir); // the new image is here: the scan over it stops
   // new boxes: node ids of the old render mean nothing now
   V.nodes.delete(name);
+  V.pins = null;
   if (V.ui.sel && V.ui.sel.board === name) V.ui.sel = null;
   if (V.ui.level && V.ui.level.board === name) V.ui.level = null;
   if (s) V.states.set(name, s);
@@ -245,6 +264,7 @@ async function openCanvas(input, { tabId, cwd } = {}) {
     states: new Map(),
     ui: { theme: 'both', follow: true, highlight: null, command: null, rev: 0, message: OPENING, sel: null, level: null, scale: 1, fit: 1 },
     nodes: new Map(), // board -> nodes tree (selection)
+    pins: null, // pinsOf cache: { key, trees, list }
     engine: null,
     fresh: new Set(),
     lastUserMove: 0,
@@ -257,6 +277,7 @@ async function openCanvas(input, { tabId, cwd } = {}) {
     failed: false,
   };
   state.views.set(viewId, V);
+  pushSidebar(); // the open canvas is highlighted
   startProbe();
   V.ready = startEngine(V); // Chrome and Tailwind start while the view opens
   try {
@@ -357,12 +378,14 @@ function clearSelection(V) {
 }
 
 // The short code of the selected node (null when nothing is selected); throws
-// when its source changed after the image (refs.checkFresh).
+// when its source changed after the image (refs.checkFresh) or while the board
+// has a render pending or in flight (its node map is about to change).
 function selectionCode(V) {
   const sel = V.ui.sel;
   const tree = sel && nodesOf(V, sel.board);
   const node = tree && view.findNode(tree, sel.k);
   if (!node) return null;
+  if (V.engine && typeof V.engine.busy === 'function' && V.engine.busy(sel.board)) throw new Error(refs.STALE_SCREEN);
   return { node, code: refs.open(dataDirOf(V.dir), V.dir).codeFor(sel.board, { ...node, via: refs.viaOf(tree.roots, node.k) }) };
 }
 
@@ -399,46 +422,57 @@ const COMMENT_INPUT = { placeholder: 'Escreva o comentário' };
 const typed = (v) => (typeof v === 'string' ? v.trim() : '');
 
 // "Comentar…" on a node: selects it, takes its code (refused while its source
-// is newer than the image) and stores the text with the node's rect.
+// is newer than the image or the board is re-rendering) and stores the text
+// with the node's rect. The store is checked before the dialog: a corrupt
+// comments.json is said up front, not after the text was typed.
 async function commentOn(V, arg) {
   const hit = nodeArg(V, arg);
   if (!hit) return null;
   V.ui.sel = { board: hit.board, k: hit.k };
   let got;
-  try { got = selectionCode(V); } catch (e) { await banner(errText(e)); return render(V); }
+  let C;
+  try {
+    got = selectionCode(V);
+    C = commentsMod.open(V.dir);
+    C.list();
+  } catch (e) { await banner(errText(e)); return render(V); }
   render(V);
   const text = typed(await mx.request('window.input', { title: 'Comentar', ...COMMENT_INPUT }));
   if (!text) return null;
-  commentsMod.open(V.dir).add({ board: hit.board, code: got.code, text, rect: got.node.rect });
+  try { C.add({ board: hit.board, code: got.code, text, rect: got.node.rect }); } catch (e) { return banner(errText(e)); }
+  V.pins = null;
   return render(V);
 }
 
 // The pin menu: "reply:<id>", "edit:<id>", "delete:<id>".
 async function onPin(V, verb, id) {
   const C = commentsMod.open(V.dir);
-  const c = C.list().find((x) => x.id === Number(id));
-  if (!c) return banner(`Comentário ${id} não existe`);
   // the store re-reads the file on each write: a reply Claude made while the
   // dialog was open survives; a comment deleted meanwhile is a message
   try {
+    const c = C.list().find((x) => x.id === Number(id));
+    if (!c) return banner(`Comentário ${id} não existe`);
     if (verb === 'delete') C.remove(c.id);
     else if (verb === 'reply') {
       const text = typed(await mx.request('window.input', { title: 'Responder', ...COMMENT_INPUT }));
       if (!text) return null;
-      C.reply(c.id, { author: 'arthur', text });
+      C.reply(c.id, { author: 'user', text });
     } else {
       const text = typed(await mx.request('window.input', { title: 'Editar comentário', ...COMMENT_INPUT, value: c.text }));
       if (!text || text === c.text) return null;
       C.edit(c.id, text);
     }
   } catch (e) { return banner(errText(e)); }
+  V.pins = null;
   return render(V);
 }
 
 // Claude answered a comment (design_comment_reply): its pin changes.
 function commentsChanged(dir) {
   const V = viewOf(dir);
-  return V ? render(V) : null;
+  if (!V) return null;
+  V.pins = null;
+  return render(V);
 }
 
 const KEY_ZOOM = { 'ctrl+0': 'fit', 'ctrl+=': 'in', 'ctrl+-': 'out' };
@@ -577,7 +611,9 @@ async function abrir(context) {
 async function pushSidebar() {
   if (!state.sidebarShown || state.exiting) return;
   const list = canvasList();
-  const params = state.caps.rfw ? { data: sidebar.data(list) } : { blocks: sidebar.blocks(list) };
+  const openDirs = new Set([...state.views.values()].map((V) => V.dir));
+  // `windows: false` hides the app's own "Janelas" list (apps that don't know it ignore it)
+  const params = state.caps.rfw ? { data: sidebar.data(list, { openDirs }), windows: false } : { blocks: sidebar.blocks(list), windows: false };
   if (state.caps.rfw && !state.sidebarLibrarySent) params.rfw = { library: fs.readFileSync(SIDEBAR_FILE, 'utf8'), root: 'root' };
   try {
     const res = await mx.request('sidebar.update', params);

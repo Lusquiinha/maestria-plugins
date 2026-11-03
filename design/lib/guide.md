@@ -71,9 +71,9 @@ Create `components/Toast.html`, use it as `<x-toast text="Salvo" tone="success">
 design_render returns one line per board (size, ms, error or "cortada" when the page is taller
 than the image limit) plus the images. A board with an error keeps its previous image on the canvas.
 
-## Comentários
-O Arthur deixa comentários nos elementos (botão direito, "Comentar…") e depois pede "faz os comentários".
-Nesse caso: `design_comments` (só os abertos); para cada um, primeiro `design_ref <código>` (marca o elemento
-e mostra o trecho), depois edite o que ele pede (um código vencido ou desconhecido não se chuta) e chame `design_comment_reply` com o que
-mudou e `done: true`. Em dúvida, ou se não deu para fazer, responda com `done: false`: o comentário fica aberto.
-Comentários feitos continuam no canvas até o Arthur apagar.
+## Comments
+The user leaves comments on elements (right-click, "Comentar…") and then asks you to "faz os comentários"
+(do the comments). Then: `design_comments` (open ones only); for each, first `design_ref <code>` (marks the
+element and shows the snippet), then edit what it asks for (never guess a stale or unknown code) and call
+`design_comment_reply` with what changed and `done: true`. When in doubt, or if it could not be done, reply
+with `done: false`: the comment stays open. Done comments stay on the canvas until the user deletes them.

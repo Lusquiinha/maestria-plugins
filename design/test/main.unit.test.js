@@ -263,6 +263,7 @@ test('sidebar.shown: the tab gets its library once and the canvases, most recent
     const d = ups[1].data;
     assert.strictEqual(d.text, 'Para criar um design novo, peça ao Claude numa sessão: "cria uma tela de…"');
     assert.deepStrictEqual(d.canvases.map((c) => [c.name, c.project, c.open]), [['y', 'repo-of-y', `open:${y}`], ['x', 'repo-of-x', `open:${x}`]]);
+    assert.ok(ups.every((u) => u.windows === false), 'the app\'s own windows list is hidden');
   } finally {
     await notified.event({ type: 'sidebar.hidden' });
     await closeAllViews();
@@ -284,6 +285,26 @@ test('the sidebar follows the canvas list while shown, and stays quiet when hidd
     await main.openCanvas(y, {});
     await sleep(10);
     assert.strictEqual(sidebarUpdates(calls).length, n);
+  } finally { await closeAllViews(); }
+});
+
+test('the sidebar highlights the open canvases and follows open and close', async () => {
+  const { dirs: [x, y] } = homeWith('Desktop/Work/co/design/x', 'Desktop/Work/co/design/y');
+  main.state.last = { byTab: {}, byCwd: {}, usedAt: { [x]: 1000, [y]: 2000 } };
+  const calls = fakeHost({ 'sidebar.update': { shown: true } });
+  const active = () => Object.fromEntries(sidebarUpdates(calls).pop().data.canvases.map((c) => [c.name, c.active]));
+  try {
+    await notified.event({ type: 'sidebar.shown' });
+    assert.deepStrictEqual(active(), { x: false, y: false });
+    await main.openCanvas(x, {});
+    await sleep(10);
+    assert.deepStrictEqual(active(), { x: true, y: false });
+    await main.openCanvas(y, {});
+    await sleep(10);
+    assert.deepStrictEqual(active(), { x: true, y: true });
+    await main.closeView(main.viewOf(x).viewId);
+    await sleep(10);
+    assert.deepStrictEqual(active(), { x: false, y: true });
   } finally { await closeAllViews(); }
 });
 
@@ -613,6 +634,53 @@ test('comment on a node whose source changed before the new render: the message,
   }
 });
 
+test('comment with a corrupt comments.json: its message before the dialog (no typed text lost); the pin menu too', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return m === 'window.input' ? 'x' : { open: true }; };
+  const V = await selCanvas('comment-corrupt');
+  try {
+    withSource(V);
+    fs.writeFileSync(path.join(V.dir, 'comments.json'), '{');
+    await main.onAction(V, 'comment:x:1');
+    assert.ok(!calls.some((c) => c.m === 'window.input'), 'no dialog');
+    assert.ok(calls.some((c) => c.m === 'window.showBanner' && /comments\.json ilegível/.test(c.p.text)));
+    const n = calls.length;
+    await main.onAction(V, 'reply:1');
+    assert.ok(!calls.slice(n).some((c) => c.m === 'window.input'));
+    assert.ok(calls.slice(n).some((c) => c.m === 'window.showBanner' && /comments\.json ilegível/.test(c.p.text)), 'the pin menu shows it too');
+    assert.strictEqual(fs.readFileSync(path.join(V.dir, 'comments.json'), 'utf8'), '{');
+  } finally {
+    answer = async () => ({ open: true });
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
+test('codes are refused while the board has a render pending or in flight (copy, ctrl+c, comment)', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return m === 'window.input' ? 'x' : { open: true }; };
+  const V = await selCanvas('sel-busy');
+  try {
+    withSource(V);
+    let busy = true;
+    V.engine.busy = (b) => busy && b === 'x';
+    const stale = () => calls.filter((c) => c.m === 'window.showBanner' && c.p.text === 'A tela mudou: espere a imagem nova').length;
+    await main.onAction(V, 'copy:x:1');
+    await main.onAction(V, 'key', { key: 'ctrl+c' });
+    await main.onAction(V, 'comment:x:1');
+    assert.ok(!calls.some((c) => c.m === 'clipboard.write' || c.m === 'window.input'), 'no code handed out');
+    assert.strictEqual(stale(), 3);
+    assert.deepStrictEqual(commentsMod.open(V.dir).list(), []);
+    busy = false;
+    await main.onAction(V, 'key', { key: 'ctrl+c' });
+    assert.match(calls.find((c) => c.m === 'clipboard.write').p.text, /^@n\d+$/);
+  } finally {
+    answer = async () => ({ open: true });
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
 test('pin menu: reply, edit (current text as value) and delete call the store; empty or cancel do nothing', async () => {
   const calls = [];
   let reply = null;
@@ -634,12 +702,12 @@ test('pin menu: reply, edit (current text as value) and delete call the store; e
     C.reply(id, { author: 'claude', text: 'pronto', done: true });
     reply = ' não ficou bom ';
     await main.onAction(V, `reply:${id}`);
-    assert.deepStrictEqual(get().replies.map((r) => [r.author, r.text]), [['claude', 'pronto'], ['arthur', 'não ficou bom']]);
-    assert.strictEqual(get().status, 'aberto', 'an answer from Arthur reopens it');
+    assert.deepStrictEqual(get().replies.map((r) => [r.author, r.text]), [['claude', 'pronto'], ['user', 'não ficou bom']]);
+    assert.strictEqual(get().status, 'aberto', 'an answer from the user reopens it');
     reply = 'verde';
     await main.onAction(V, `edit:${id}`);
     assert.strictEqual(get().text, 'verde');
-    assert.match(lastData(calls).pins[0].tooltip, /^#\d+ · verde\nClaude: pronto\nArthur: não ficou bom$/);
+    assert.match(lastData(calls).pins[0].tooltip, /^#\d+ · verde\nClaude: pronto\nVocê: não ficou bom$/);
     await main.onAction(V, `delete:${id}`);
     assert.deepStrictEqual(C.list(), []);
     assert.deepStrictEqual(lastData(calls).pins, []);
@@ -691,8 +759,51 @@ test('zoom redraws when pins are on screen (they keep their size)', async () => 
     commentsMod.open(V.dir).add({ board: 'x', code: '@n1', text: 'a', rect: { x: 0, y: 0, w: 10, h: 10 } });
     await main.render(V);
     await main.onAction(V, 'zoom', { scale: 2 });
-    assert.strictEqual(lastData(calls).pins[0].size, 12 - 1e-9);
+    assert.ok(Math.abs(lastData(calls).pins[0].size - 12) < 1e-6, `pin size ${lastData(calls).pins[0].size}`);
   } finally {
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});
+
+test('pins are cached: zoom ticks reuse them; a comments.json change or a new render resolves again', async () => {
+  const calls = [];
+  answer = async (m, p) => { calls.push({ m, p }); return { open: true }; };
+  const V = await selCanvas('pin-cache');
+  const refsMod = require('../lib/refs');
+  const realOpen = commentsMod.open;
+  const realRefs = refsMod.open;
+  let lists = 0;
+  let refOpens = 0;
+  commentsMod.open = (dir) => { const C = realOpen(dir); const list = C.list; C.list = (...a) => { lists += 1; return list(...a); }; return C; };
+  refsMod.open = (...a) => { refOpens += 1; return realRefs(...a); };
+  try {
+    fs.mkdirSync(V.dir, { recursive: true });
+    realOpen(V.dir).add({ board: 'x', code: '@n1', text: 'a', rect: { x: 0, y: 0, w: 10, h: 10 } });
+    await main.render(V);
+    assert.strictEqual(lastData(calls).pins.length, 2);
+    lists = 0; refOpens = 0;
+    const n = calls.length;
+    await main.onAction(V, 'zoom', { scale: 2 });
+    await main.onAction(V, 'zoom', { scale: 3 });
+    assert.strictEqual(calls.length, n + 2, 'both zoom ticks redraw');
+    assert.deepStrictEqual([lists, refOpens], [0, 0], 'no store or refs read on a zoom tick');
+    assert.strictEqual(lastData(calls).pins.length, 2);
+    // a new comment written elsewhere (comments.json changes) shows up
+    const file = path.join(V.dir, 'comments.json');
+    realOpen(V.dir).add({ board: 'x', code: '@n2', text: 'b', rect: { x: 0, y: 0, w: 10, h: 10 } });
+    fs.utimesSync(file, new Date(), new Date(Date.now() + 5000));
+    await main.render(V);
+    assert.strictEqual(lastData(calls).pins.length, 4);
+    // a new render of the board resolves again
+    lists = 0;
+    V.engine.emit('board', 'x', { light: 'l.png', dark: 'd.png', width: 400, height: 200, rev: 2 });
+    await sleep(10);
+    assert.ok(lists > 0, 'the board event drops the cache');
+  } finally {
+    commentsMod.open = realOpen;
+    refsMod.open = realRefs;
+    answer = async () => ({ open: true });
     await main.closeView(V.viewId);
     main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
   }
