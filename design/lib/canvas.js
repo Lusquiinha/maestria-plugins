@@ -36,10 +36,10 @@ function read(dir) {
   const warnings = [];
   const boards = {};
   for (const [name, b] of Object.entries(raw.boards || {})) {
-    if (!validName(name)) { warnings.push(`board "${name}" ignorado: nome inválido`); continue; }
+    if (!validName(name)) { warnings.push(`Tela "${name}" ignorada: nome inválido`); continue; }
     if (!b || typeof b !== 'object' || Array.isArray(b) || !fin(b.x) || !fin(b.y) || !fin(b.w)
       || (b.h != null && !fin(b.h))) {
-      warnings.push(`board "${name}" ignorado: x, y e w precisam ser números`);
+      warnings.push(`Tela "${name}" ignorada: x, y e w precisam ser números`);
       continue;
     }
     boards[name] = b;

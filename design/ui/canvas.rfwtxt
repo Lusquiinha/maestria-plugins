@@ -47,7 +47,7 @@ widget Bar = Container(
       Expanded(
         child: Text(text: data.title, maxLines: 1, overflow: "ellipsis", style: { fontSize: 16.0, fontWeight: "w600", color: data.theme.fg }),
       ),
-      MenuButton(icon: "more", tooltip: "tema, pranchetas e seguir o claude", menu: data.menu, onMenu: event "act" {}),
+      MenuButton(icon: "more", tooltip: "Tema, telas e acompanhar o Claude", menu: data.menu, onMenu: event "act" {}),
     ],
   ),
 );
@@ -89,7 +89,7 @@ widget Area = switch data.hasBoards {
     default: Zoom(),
   },
   default: Center(
-    child: Text(text: "nenhuma prancheta ainda: peça ao claude pra desenhar uma", style: { fontSize: 16.0, color: data.theme.dim }),
+    child: Text(text: "Nenhuma tela ainda. Peça ao Claude numa sessão pra desenhar uma.", style: { fontSize: 16.0, color: data.theme.dim }),
   ),
 };
 

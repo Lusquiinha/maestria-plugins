@@ -108,7 +108,7 @@ test('answers initialize and exits when stdin closes', async () => {
     const r = await h.request('initialize', { apiVersion: 1, rfw: 2, dataDir: tmp });
     assert.deepStrictEqual(r.result, {});
     const c = await h.request('command.invoke', { command: 'ajustar', context: {} }); // gone: zoom is the wheel and the keys
-    assert.match(c.error.message, /comando desconhecido: ajustar/);
+    assert.match(c.error.message, /Comando desconhecido: ajustar/);
     h.proc.stdin.end();
     assert.strictEqual(await h.exited, 0);
   } finally {
@@ -372,7 +372,7 @@ test('select on the canvas: tap, double-tap, ctrl+c copies the @n code, escape c
     act({ a: 'key', key: 'ctrl+c' });
     const c = await clip;
     assert.match(c.params.text, /^@n\d+$/);
-    assert.strictEqual((await ban).params.text, `copiado ${c.params.text}`);
+    assert.strictEqual((await ban).params.text, `Código ${c.params.text} copiado`);
     const refs = JSON.parse(fs.readFileSync(path.join(dataDir, hash, 'refs.json'), 'utf8'));
     const entry = refs.codes[c.params.text.slice(2)];
     assert.strictEqual(entry.board, top.board);

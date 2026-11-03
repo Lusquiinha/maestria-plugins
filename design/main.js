@@ -8,8 +8,9 @@
 // Pra as ferramentas MCP: `openCanvas(dir, { tabId, cwd })` abre ou traz pra
 // frente o canvas ao lado da sessão; `focusBoard(viewOrDir, name)` foca uma
 // prancheta; `viewOf(dir)` devolve a janela aberta (com `.engine`).
-// O comando `design: abrir` funciona sem sessão em foco: escolhe (ou cria) um
-// canvas e, sem um claude ao lado, abre um no repo do canvas.
+// O comando `abrir` e a aba Design da lateral funcionam sem sessão em foco:
+// escolhem um canvas e, sem um claude ao lado, abrem um no repo do canvas. Um
+// canvas novo nasce pedindo ao Claude (design_open), nunca por aqui.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -24,9 +25,12 @@ const tools = require('./lib/tools');
 const scanner = require('./lib/scanner');
 const sweep = require('./lib/sweep');
 const refs = require('./lib/refs');
+const sidebar = require('./lib/sidebar');
 
 const PLUGIN_ID = 'maestria.design';
 const UI_FILE = path.join(__dirname, 'ui', 'canvas.rfwtxt');
+const SIDEBAR_FILE = path.join(__dirname, 'ui', 'sidebar.rfwtxt');
+const SIDEBAR = 'sidebar';
 const HIGHLIGHT_MS = 3000;
 const CLOSE_GRACE_MS = 600; // the host SIGTERMs 0.8 s after `shutdown`
 // The host only tells about closed modals (view.closed), not closed grid tabs:
@@ -34,26 +38,30 @@ const CLOSE_GRACE_MS = 600; // the host SIGTERMs 0.8 s after `shutdown`
 const PROBE_MS = Number(process.env.MAESTRIA_DESIGN_PROBE_MS) > 0 ? Number(process.env.MAESTRIA_DESIGN_PROBE_MS) : 5000;
 
 const OUTDATED = [
-  { type: 'heading', text: 'este maestria não desenha o canvas do design' },
-  { type: 'text', text: 'o canvas precisa de uma versão do maestria com widgets (rfw). atualize o app e abra de novo.' },
+  { type: 'heading', text: 'Este Maestria não desenha o canvas do Design' },
+  { type: 'text', text: 'O canvas precisa de uma versão do Maestria com widgets (rfw). Atualize o app e abra de novo.' },
 ];
 
 const state = {
   caps: { rfw: false, picture: 0, zoomFocus: 0, zoomPan: 0, keyListener: 0 },
   pluginDir: __dirname,
   dataDir: process.env.MAESTRIA_PLUGIN_DATA || path.join(os.homedir(), '.maestria-rs', 'plugin-data', PLUGIN_ID),
-  home: os.homedir(), // where `design: abrir` looks for canvases (Desktop/Work/*/design/*)
+  home: os.homedir(), // where `abrir` and the sidebar look for canvases (Desktop/Work/*/design/*)
   views: new Map(), // viewId -> V
   // the last canvas opened per session / cwd, and when each canvas was last opened (ms)
   last: { byTab: {}, byCwd: {}, usedAt: {} },
   engines: new Set(), // engines not yet closed (killed on exit, even mid-close)
   pending: new Map(), // engine dataDir -> engineMod.open() still in flight
   probe: null, // the timer of the closed-tab probe
+  sidebarShown: false, // the Design tab is the live sidebar tab
+  sidebarLibrarySent: false,
   exiting: false,
 };
 
 // the blue band over what Claude is editing; a timed-out scan redraws its canvas
 const scans = scanner.create({ onChange: (dir) => { const V = viewOf(dir); if (V) render(V); } });
+
+const OPENING = 'Abrindo o canvas…';
 
 const errText = (e) => String((e && e.message) || e);
 const hashOf = (dir) => crypto.createHash('sha1').update(path.resolve(dir)).digest('hex').slice(0, 12);
@@ -85,6 +93,7 @@ function remember(dir, { tabId, cwd } = {}) {
     fs.mkdirSync(state.dataDir, { recursive: true });
     fs.writeFileSync(lastFile(), `${JSON.stringify(state.last, null, 2)}\n`);
   } catch (e) { mx.log('last.json:', errText(e)); }
+  pushSidebar();
 }
 
 function lastFor({ tabId, cwd }) {
@@ -137,8 +146,8 @@ function command(V, cmd) {
 
 function focusBoard(target, name) {
   const V = typeof target === 'string' ? viewOf(target) : target;
-  if (!V) throw new Error('o canvas não está aberto');
-  if (!V.canvas || !Object.prototype.hasOwnProperty.call(V.canvas.boards, name)) throw new Error(`prancheta não existe: ${name}`);
+  if (!V) throw new Error('O canvas não está aberto');
+  if (!V.canvas || !Object.prototype.hasOwnProperty.call(V.canvas.boards, name)) throw new Error(`A tela "${name}" não existe`);
   return command(V, { kind: 'focus', board: name });
 }
 
@@ -175,7 +184,7 @@ async function openCanvas(input, { tabId, cwd } = {}) {
   if (tabId) await mx.request('session.focus', { tabId }).catch((e) => mx.log('session.focus:', errText(e)));
   const viewId = viewIdOf(dir);
   if (!state.caps.rfw) {
-    await mx.request('view.open', { viewId, title: 'Design', blocks: OUTDATED });
+    await mx.request('view.open', { viewId, title: sidebar.viewTitle(''), blocks: OUTDATED });
     return null;
   }
   remember(dir, { tabId, cwd });
@@ -183,12 +192,12 @@ async function openCanvas(input, { tabId, cwd } = {}) {
   if (open) {
     if (open.failed) { // the last open failed (no design.json, chrome missing…): try again
       open.failed = false;
-      open.ui.message = 'abrindo o canvas…';
+      open.ui.message = OPENING;
       open.ready = startEngine(open);
     } else if (open.engine && open.engine.chromeError) { // chrome gave up for good: a fresh engine
       const old = open.engine;
       open.engine = null;
-      open.ui.message = 'abrindo o canvas…';
+      open.ui.message = OPENING;
       open.ready = closeEngine(old).then(() => startEngine(open));
     }
     await mx.request('view.open', { viewId, title: open.title, rfw: { library: library(), root: 'root' }, data: data(open) });
@@ -201,10 +210,10 @@ async function openCanvas(input, { tabId, cwd } = {}) {
     viewId,
     dir,
     hash: hashOf(dir),
-    title: `design: ${canvas.title}`,
+    title: sidebar.viewTitle(canvas.title),
     canvas,
     states: new Map(),
-    ui: { theme: 'both', follow: true, highlight: null, command: null, rev: 0, message: 'abrindo o canvas…', sel: null, level: null, scale: 1, fit: 1 },
+    ui: { theme: 'both', follow: true, highlight: null, command: null, rev: 0, message: OPENING, sel: null, level: null, scale: 1, fit: 1 },
     nodes: new Map(), // board -> nodes tree (selection)
     engine: null,
     fresh: new Set(),
@@ -242,7 +251,7 @@ async function startEngine(V) {
   } catch (e) {
     if (state.pending.get(dataDir) === opening) state.pending.delete(dataDir);
     mx.log(`abrir ${V.dir}:`, errText(e));
-    V.ui.message = `não abriu: ${errText(e)}`;
+    V.ui.message = `Não abriu: ${errText(e)}`;
     V.failed = true;
     await render(V);
     return;
@@ -252,11 +261,11 @@ async function startEngine(V) {
   if (V.closed || state.exiting) { await closeEngine(eng); return; }
   V.engine = eng;
   V.canvas = eng.canvas;
-  V.title = `design: ${eng.canvas.title}`;
+  V.title = sidebar.viewTitle(eng.canvas.title);
   V.fresh = new Set(eng.renderable());
   V.ui.message = '';
   eng.on('board', (name, s) => onBoard(V, name, s));
-  eng.on('canvas', (c) => { V.canvas = c; V.title = `design: ${c.title}`; render(V); });
+  eng.on('canvas', (c) => { V.canvas = c; V.title = sidebar.viewTitle(c.title); render(V); });
   await render(V);
 }
 
@@ -269,6 +278,7 @@ async function closeView(viewId) {
   clearTimeout(V.highlightTimer);
   scans.clear(V.dir);
   if (!state.caps.picture) { try { view.clearSprites({ pluginDir: state.pluginDir, hash: V.hash }); } catch { /* best effort */ } }
+  pushSidebar();
   if (V.engine) await closeEngine(V.engine);
 }
 
@@ -329,7 +339,7 @@ async function copySelection(V) {
     return banner(errText(e));
   }
   await mx.request('clipboard.write', { text: code });
-  banner(`copiado ${code}`);
+  banner(`Código ${code} copiado`);
 }
 
 const TAP_AFTER_MOVE_MS = 250;
@@ -386,10 +396,10 @@ async function onAction(V, act, vals = {}) {
     const b = canvas.boards[arg];
     if (!b) return null;
     const current = typeof b.title === 'string' && b.title ? b.title : arg;
-    const name = await mx.request('window.input', { title: 'design: renomear tela', placeholder: 'Nome da tela', value: current });
+    const name = await mx.request('window.input', { title: 'Renomear tela', placeholder: 'Nome da tela', value: current });
     const next = typeof name === 'string' ? name.trim() : '';
     if (!next || next === current) return null;
-    if (next.length > 120) return banner('o nome da tela passa de 120 caracteres');
+    if (next.length > 120) return banner('O nome da tela passa de 120 caracteres');
     // the dialog may stay open a while: re-read so a concurrent edit survives
     let fresh;
     try { fresh = canvasMod.read(V.dir); } catch (e) { return banner(errText(e)); }
@@ -440,9 +450,6 @@ async function onAction(V, act, vals = {}) {
 
 // --- os comandos ----------------------------------------------------------------------
 
-const NOVO = ':novo'; // the pick value of "novo canvas…" (canvas values are absolute paths)
-const NAME_HINT = 'use letras minúsculas, números, - e _';
-
 const promptFor = (dir) => `Call design_open with canvas="${dir}" and wait for my request.`;
 
 /** O repo do canvas (design.json), pra abrir o claude nele. */
@@ -464,66 +471,56 @@ async function liveClaudeTabs() {
 /**
  * Abre o canvas ao lado de um claude: o do contexto, senão o último ainda aberto
  * que já estava ligado a este canvas, senão um novo no repo do canvas.
- * `fresh` sempre abre um claude novo (o `novo canvas…`).
  */
-async function openWithSession(dir, context, { fresh = false } = {}) {
+async function openWithSession(dir, context) {
   const { cwd } = context || {};
-  if (!fresh) {
-    const live = await liveClaudeTabs();
-    const ctxTab = context && context.tabId;
-    if (ctxTab && live.has(ctxTab)) return openCanvas(dir, { tabId: ctxTab, cwd });
-    const linked = Object.keys(state.last.byTab).filter((t) => state.last.byTab[t] === dir).reverse();
-    const tabId = linked.find((t) => live.has(t));
-    if (tabId) return openCanvas(dir, { tabId, cwd });
-  }
+  const live = await liveClaudeTabs();
+  const ctxTab = context && context.tabId;
+  if (ctxTab && live.has(ctxTab)) return openCanvas(dir, { tabId: ctxTab, cwd });
+  const linked = Object.keys(state.last.byTab).filter((t) => state.last.byTab[t] === dir).reverse();
+  const tabId = linked.find((t) => live.has(t));
+  if (tabId) return openCanvas(dir, { tabId, cwd });
   const repo = repoOf(dir) || cwd || path.dirname(dir);
   const opened = await mx.request('session.openClaude', { cwd: repo, prompt: promptFor(dir) });
   return openCanvas(dir, { tabId: opened && opened.tabId, cwd: repo });
 }
 
-async function askName() {
-  let value = '';
-  let prompt;
-  for (;;) {
-    const name = await mx.request('window.input', {
-      title: 'design: novo canvas', placeholder: 'nome do canvas', value, ...(prompt ? { prompt } : {}),
-    });
-    if (!name) return null;
-    if (canvasMod.validName(name)) return name;
-    value = name;
-    prompt = `"${name}" não serve: ${NAME_HINT}`;
-  }
-}
-
-async function novoCanvas(context) {
-  const name = await askName();
-  if (!name) return null;
-  const folders = (await mx.request('folders.list', {})) || [];
-  if (!folders.length) return banner('nenhuma pasta na maestria: adicione o projeto e tente de novo');
-  const root = await mx.request('window.pick', {
-    title: `design: novo canvas "${name}"`,
-    placeholder: 'em qual projeto?',
-    items: folders.map((f) => ({ value: f.root, label: f.name, detail: f.root })),
-  });
-  if (!root) return null;
-  const dir = canvasMod.defaultDir({ cwd: root, name, home: state.home }) || path.join(path.dirname(root), 'design', name);
-  canvasMod.init(dir, { repo: canvasMod.gitRoot(root) });
-  return openWithSession(dir, context, { fresh: true }); // a new canvas gets its own claude, in its project
-}
+const canvasList = () => sidebar.canvases({ home: state.home, last: state.last });
 
 async function abrir(context) {
-  const canvases = canvasMod.list({ home: state.home, last: state.last });
+  const canvases = canvasList();
+  if (!canvases.length) return banner(sidebar.EMPTY_BANNER);
   const choice = await mx.request('window.pick', {
-    title: 'design: abrir',
-    placeholder: 'qual canvas?',
-    items: [
-      { value: NOVO, label: 'novo canvas…', detail: 'escolha o nome e o projeto' },
-      ...canvases.map((c) => ({ value: c.dir, label: c.name, detail: c.dir })),
-    ],
+    title: 'Abrir canvas de telas',
+    placeholder: 'Qual canvas?',
+    items: sidebar.pickItems(canvases, { home: state.home }),
   });
   if (!choice) return null;
-  if (choice === NOVO) return novoCanvas(context);
   return openWithSession(choice, context);
+}
+
+// --- a aba Design na lateral ----------------------------------------------------------
+
+async function pushSidebar() {
+  if (!state.sidebarShown || state.exiting) return;
+  const list = canvasList();
+  const params = state.caps.rfw ? { data: sidebar.data(list) } : { blocks: sidebar.blocks(list) };
+  if (state.caps.rfw && !state.sidebarLibrarySent) params.rfw = { library: fs.readFileSync(SIDEBAR_FILE, 'utf8'), root: 'root' };
+  try {
+    const res = await mx.request('sidebar.update', params);
+    if (params.rfw) state.sidebarLibrarySent = true;
+    if (res && res.shown === false) state.sidebarShown = false;
+  } catch (e) { mx.log('sidebar.update:', errText(e)); }
+}
+
+// A click on a canvas: the same as picking it in `abrir`, beside the focused claude.
+async function sidebarAction(act) {
+  if (!act.startsWith('open:')) return null;
+  const dir = act.slice('open:'.length);
+  if (!canvasList().some((c) => c.dir === dir)) return null;
+  let focused = null;
+  try { focused = await mx.request('sessions.focused', {}); } catch (e) { mx.log('sessions.focused:', errText(e)); }
+  return openWithSession(dir, focused ? { tabId: focused.id, cwd: focused.cwd } : {});
 }
 
 // --- o protocolo ----------------------------------------------------------------------
@@ -550,7 +547,7 @@ mx.onRequest('command.invoke', ({ command: id, context }) => {
     banner(errText(e));
   });
   if (id === 'abrir') run(() => abrir(context));
-  else throw new Error(`comando desconhecido: ${id}`);
+  else throw new Error(`Comando desconhecido: ${id}`);
   return null;
 });
 
@@ -561,12 +558,13 @@ const host = { request: mx.request, openCanvas, viewOf, focusBoard, lastFor, dat
 mx.onRequest('tool.call', ({ tool, args, tabId, cwd }) => tools.handle(tool, args, { tabId, cwd, host }));
 
 mx.onNotification('view.action', async ({ viewId, action, values }) => {
-  const V = state.views.get(viewId);
-  if (!V) return;
   const vals = values || {};
   const act = String(vals.a || vals.action || action || '');
+  const V = state.views.get(viewId);
+  if (!V && viewId !== SIDEBAR) return;
   try {
-    await onAction(V, act, vals);
+    if (V) await onAction(V, act, vals);
+    else await sidebarAction(act);
   } catch (e) {
     mx.log(`ação ${act}:`, errText(e));
     banner(errText(e));
@@ -593,10 +591,13 @@ function onHook(e) {
 
 mx.onNotification('event', (e) => {
   if (!e) return;
-  if (e.type === 'view.closed') closeView(e.viewId);
-  else if (e.type === 'hook') {
+  if (e.type === 'view.closed') return closeView(e.viewId);
+  if (e.type === 'sidebar.shown') { state.sidebarShown = true; return pushSidebar(); }
+  if (e.type === 'sidebar.hidden') { state.sidebarShown = false; return null; }
+  if (e.type === 'hook') {
     try { onHook(e); } catch (err) { mx.log('hook:', errText(err)); }
   }
+  return null;
 });
 
 // --- sem órfãos: o Chrome e o Tailwind morrem com o plugin ------------------------------

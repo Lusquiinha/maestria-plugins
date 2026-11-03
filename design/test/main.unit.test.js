@@ -12,12 +12,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // the protocol: requests answered by `answer`, never stdin/stdout
 let answer = async () => ({ open: true });
+const notified = {}; // the protocol notification handlers main.js registers
 const mxPath = require.resolve('../maestria');
 require.cache[mxPath] = {
   id: mxPath, filename: mxPath, loaded: true,
   exports: {
     request: (m, p) => answer(m, p),
-    notify: () => {}, log: () => {}, onRequest: () => {}, onNotification: () => {}, start: () => {},
+    notify: () => {}, log: () => {}, onRequest: () => {}, onNotification: (m, fn) => { notified[m] = fn; }, start: () => {},
   },
 };
 
@@ -110,7 +111,7 @@ test('a PreToolUse edit from the linked tab draws a scan until the board renders
   }
 });
 
-// --- abrir / novo canvas -------------------------------------------------------------
+// --- abrir -------------------------------------------------------------
 
 const canvasMod = require('../lib/canvas');
 
@@ -145,19 +146,33 @@ async function closeAllViews() {
   answer = async () => ({ open: true });
 }
 
-test('abrir: "novo canvas…" first, then the canvases by last use', async () => {
-  const { dirs: [x, y] } = homeWith('Desktop/Work/co/design/x', 'Desktop/Work/co/design/y');
+test('abrir: only the canvases, most recent first, with project and folder; no "novo"', async () => {
+  const { home, dirs: [x, y] } = homeWith('Desktop/Work/co/design/x', 'Desktop/Work/co/design/y');
   main.state.last = { byTab: {}, byCwd: {}, usedAt: { [x]: 1000, [y]: 2000 } };
   const calls = fakeHost({ 'window.pick': null });
   try {
     await main.abrir({});
     const picks = calls.filter(([m]) => m === 'window.pick');
     assert.strictEqual(picks.length, 1);
-    const items = picks[0][1].items;
-    assert.strictEqual(items[0].label, 'novo canvas…');
-    assert.deepStrictEqual(items.slice(1).map((i) => i.value), [y, x]);
-    assert.deepStrictEqual(items.slice(1).map((i) => i.label), ['y', 'x']);
-    assert.ok(!calls.some(([m]) => m === 'session.openClaude' || m === 'view.open'), 'cancel does nothing');
+    const { title, items } = picks[0][1];
+    assert.strictEqual(title, 'Abrir canvas de telas');
+    assert.deepStrictEqual(items.map((i) => i.value), [y, x]);
+    assert.deepStrictEqual(items.map((i) => i.label), ['y', 'x']);
+    assert.strictEqual(items[0].detail, `repo-of-y · ${y.replace(home, '~')}`);
+    assert.ok(!items.some((i) => /novo/i.test(i.label)), 'no "novo canvas…"');
+    assert.ok(!calls.some(([m]) => m === 'session.openClaude' || m === 'view.open' || m === 'window.input'), 'cancel does nothing');
+  } finally { await closeAllViews(); }
+});
+
+test('abrir with no canvas: a banner saying to ask Claude, no picker', async () => {
+  homeWith();
+  main.state.last = { byTab: {}, byCwd: {} };
+  const calls = fakeHost({});
+  try {
+    await main.abrir({});
+    assert.ok(!calls.some(([m]) => m === 'window.pick'));
+    const b = calls.find(([m]) => m === 'window.showBanner');
+    assert.strictEqual(b[1].text, 'Nenhum canvas ainda. Peça ao Claude numa sessão: "cria uma tela de…"');
   } finally { await closeAllViews(); }
 });
 
@@ -203,60 +218,6 @@ test('abrir from a tab that is not claude (a shell, the canvas itself) opens a c
   } finally { await closeAllViews(); }
 });
 
-test('novo canvas…: name → folder → init → claude session → canvas, in that order', async () => {
-  const { home } = homeWith();
-  main.state.last = { byTab: {}, byCwd: {} };
-  const root = path.join(home, 'Desktop', 'Work', 'co', 'proj');
-  fs.mkdirSync(root, { recursive: true });
-  const seq = [];
-  const realInit = canvasMod.init;
-  canvasMod.init = (dir, opts) => {
-    seq.push('init');
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'canvas.json'), JSON.stringify({ v: 1, title: 'meu', boards: {}, order: [] }));
-    fs.writeFileSync(path.join(dir, 'design.json'), JSON.stringify({ repo: opts.repo }));
-    return { created: true };
-  };
-  let picks = 0;
-  const inputs = ['Nome Ruim', 'meu'];
-  const calls = fakeHost({
-    'window.pick': (p) => { picks += 1; return picks === 1 ? p.items[0].value : root; },
-    'window.input': () => inputs.shift(),
-    'folders.list': [{ name: 'proj', root }, { name: 'outro', root: path.join(home, 'outro') }],
-    'session.openClaude': { tabId: 'tab-n' },
-    'sessions.list': [],
-  });
-  const realAnswer = answer;
-  answer = async (m, p) => { seq.push(m); return realAnswer(m, p); };
-  try {
-    await main.abrir({});
-    const dir = path.join(home, 'Desktop', 'Work', 'co', 'design', 'meu');
-    const flow = seq.filter((m) => ['window.pick', 'window.input', 'folders.list', 'init', 'session.openClaude', 'view.open'].includes(m));
-    assert.deepStrictEqual(flow, ['window.pick', 'window.input', 'window.input', 'folders.list', 'window.pick', 'init', 'session.openClaude', 'view.open']);
-    const inp = calls.filter(([m]) => m === 'window.input');
-    assert.match(inp[1][1].prompt, /minúsculas/, 'a bad name asks again, saying why');
-    const folderPick = calls.filter(([m]) => m === 'window.pick')[1][1];
-    assert.deepStrictEqual(folderPick.items.map((i) => i.label), ['proj', 'outro']);
-    const oc = calls.find(([m]) => m === 'session.openClaude')[1];
-    assert.strictEqual(oc.cwd, root);
-    assert.strictEqual(oc.prompt, `Call design_open with canvas="${dir}" and wait for my request.`);
-    assert.strictEqual(main.state.last.byTab['tab-n'], dir);
-    assert.ok(main.viewOf(dir));
-  } finally {
-    canvasMod.init = realInit;
-    await closeAllViews();
-  }
-});
-
-test('novo canvas…: escape at the name or the folder stops quietly', async () => {
-  homeWith();
-  const calls = fakeHost({ 'window.pick': (p) => p.items[0].value, 'window.input': null });
-  try {
-    await main.abrir({});
-    assert.ok(!calls.some(([m]) => m === 'folders.list' || m === 'session.openClaude'));
-  } finally { await closeAllViews(); }
-});
-
 test('abrir reuses the live claude tab already linked to the canvas (most recent link first)', async () => {
   const { dirs: [x] } = homeWith('Desktop/Work/co/design/x');
   main.state.last = { byTab: { 'tab-old': x, 'tab-other': '/elsewhere', 'tab-new': x }, byCwd: {} };
@@ -283,38 +244,90 @@ test('abrir: a linked tab that has exited is not reused', async () => {
   } finally { await closeAllViews(); }
 });
 
-test('novo canvas… from a focused claude tab still opens a fresh claude in the project', async () => {
-  const { home } = homeWith();
-  main.state.last = { byTab: {}, byCwd: {} };
-  const root = path.join(home, 'Desktop', 'Work', 'co', 'proj');
-  fs.mkdirSync(root, { recursive: true });
-  const realInit = canvasMod.init;
-  canvasMod.init = (dir, opts) => {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'canvas.json'), JSON.stringify({ v: 1, title: 'novo', boards: {}, order: [] }));
-    fs.writeFileSync(path.join(dir, 'design.json'), JSON.stringify({ repo: opts.repo }));
-    return { created: true };
-  };
-  let picks = 0;
-  const calls = fakeHost({
-    'window.pick': (p) => { picks += 1; return picks === 1 ? p.items[0].value : root; },
-    'window.input': 'novo',
-    'folders.list': [{ name: 'proj', root }],
-    'sessions.list': [{ id: 'tab-focus', kind: 'claude' }],
-    'session.openClaude': { tabId: 'tab-fresh' },
-  });
+// --- the Design tab in the sidebar ----------------------------------------------------
+
+const sidebarUpdates = (calls) => calls.filter(([m]) => m === 'sidebar.update').map(([, p]) => p);
+
+test('sidebar.shown: the tab gets its library once and the canvases, most recent first', async () => {
+  const { dirs: [x, y] } = homeWith('Desktop/Work/co/design/x', 'Desktop/Work/co/design/y');
+  main.state.last = { byTab: {}, byCwd: {}, usedAt: { [x]: 1000, [y]: 2000 } };
+  const calls = fakeHost({ 'sidebar.update': { shown: true } });
   try {
-    await main.abrir({ cwd: '/w', tabId: 'tab-focus' });
-    const dir = path.join(home, 'Desktop', 'Work', 'co', 'design', 'novo');
-    const oc = calls.find(([m]) => m === 'session.openClaude');
-    assert.ok(oc, 'a fresh claude');
-    assert.strictEqual(oc[1].cwd, root);
-    assert.strictEqual(main.state.last.byTab['tab-fresh'], dir);
-    assert.ok(!('tab-focus' in main.state.last.byTab));
+    await notified.event({ type: 'sidebar.shown' });
+    await notified.event({ type: 'sidebar.shown' });
+    const ups = sidebarUpdates(calls);
+    assert.strictEqual(ups.length, 2);
+    assert.strictEqual(ups[0].rfw.root, 'root');
+    assert.match(ups[0].rfw.library, /widget root/);
+    assert.ok(!('rfw' in ups[1]), 'the library is sent once');
+    const d = ups[1].data;
+    assert.strictEqual(d.text, 'Para criar um design novo, peça ao Claude numa sessão: "cria uma tela de…"');
+    assert.deepStrictEqual(d.canvases.map((c) => [c.name, c.project, c.open]), [['y', 'repo-of-y', `open:${y}`], ['x', 'repo-of-x', `open:${x}`]]);
   } finally {
-    canvasMod.init = realInit;
+    await notified.event({ type: 'sidebar.hidden' });
     await closeAllViews();
   }
+});
+
+test('the sidebar follows the canvas list while shown, and stays quiet when hidden', async () => {
+  const { dirs: [x, y] } = homeWith('Desktop/Work/co/design/x', 'Desktop/Work/co/design/y');
+  main.state.last = { byTab: {}, byCwd: {}, usedAt: { [x]: 1000, [y]: 2000 } };
+  const calls = fakeHost({ 'sidebar.update': { shown: true } });
+  try {
+    await notified.event({ type: 'sidebar.shown' });
+    await main.openCanvas(x, {});
+    await sleep(10);
+    const last = sidebarUpdates(calls).pop();
+    assert.deepStrictEqual(last.data.canvases.map((c) => c.name), ['x', 'y'], 'the opened canvas moves to the top');
+    await notified.event({ type: 'sidebar.hidden' });
+    const n = sidebarUpdates(calls).length;
+    await main.openCanvas(y, {});
+    await sleep(10);
+    assert.strictEqual(sidebarUpdates(calls).length, n);
+  } finally { await closeAllViews(); }
+});
+
+test('a click on a canvas in the sidebar opens it beside the focused claude', async () => {
+  const { dirs: [x] } = homeWith('Desktop/Work/co/design/x');
+  main.state.last = { byTab: {}, byCwd: {} };
+  const calls = fakeHost({
+    'sessions.focused': { id: 'tab-f', kind: 'claude', cwd: '/w' },
+    'sessions.list': [{ id: 'tab-f', kind: 'claude' }],
+    'sidebar.update': { shown: false },
+  });
+  try {
+    await notified['view.action']({ viewId: 'sidebar', action: 'act', values: { a: `open:${x}` } });
+    assert.ok(!calls.some(([m]) => m === 'session.openClaude'));
+    assert.strictEqual(calls.find(([m]) => m === 'session.focus')[1].tabId, 'tab-f');
+    assert.strictEqual(main.state.last.byTab['tab-f'], x);
+    assert.ok(main.viewOf(x));
+  } finally { await closeAllViews(); }
+});
+
+test('a click on a canvas in the sidebar with no claude focused opens one in its repo', async () => {
+  const { dirs: [x] } = homeWith('Desktop/Work/co/design/x');
+  main.state.last = { byTab: {}, byCwd: {} };
+  const calls = fakeHost({ 'sessions.focused': null, 'sessions.list': [], 'session.openClaude': { tabId: 'tab-o' }, 'sidebar.update': { shown: false } });
+  try {
+    await notified['view.action']({ viewId: 'sidebar', action: 'act', values: { a: `open:${x}` } });
+    assert.ok(calls.some(([m]) => m === 'session.openClaude'));
+    assert.ok(main.viewOf(x));
+    await notified['view.action']({ viewId: 'sidebar', action: 'act', values: { a: 'open:/not/a/canvas' } });
+    assert.ok(!main.viewOf('/not/a/canvas'), 'only listed canvases open');
+  } finally { await closeAllViews(); }
+});
+
+test('the canvas tab is titled "Design · <canvas title>"', async () => {
+  const dir = path.join(tmp, 'titled');
+  const calls = fakeHost({});
+  try {
+    await main.openCanvas(dir, {});
+    const opens = calls.filter(([m]) => m === 'view.open').map(([, p]) => p.title);
+    assert.deepStrictEqual(opens, ['Design · titled']);
+    await sleep(60);
+    const ups = calls.filter(([m, p]) => m === 'view.update' && p.title).map(([, p]) => p.title);
+    assert.strictEqual(ups.pop(), 'Design · t', 'the engine canvas title');
+  } finally { await closeAllViews(); }
 });
 
 // ---- selection --------------------------------------------------------------
@@ -445,7 +458,7 @@ test('ctrl+c after the source changed but before the new render shows the messag
     await main.onAction(V, 'sel:x:1');
     await main.onAction(V, 'key', { key: 'ctrl+c' });
     assert.ok(!calls.some((c) => c.m === 'clipboard.write'), 'nothing copied');
-    assert.ok(calls.some((c) => c.m === 'window.showBanner' && c.p.text === 'a prancheta mudou: espere a imagem nova'));
+    assert.ok(calls.some((c) => c.m === 'window.showBanner' && c.p.text === 'A tela mudou: espere a imagem nova'));
     fs.utimesSync(nodesFile, 3000, 3000);
     await main.onAction(V, 'key', { key: 'ctrl+c' });
     assert.match(calls.find((c) => c.m === 'clipboard.write').p.text, /^@n\d+$/);
@@ -480,7 +493,7 @@ test('right-click copy on a node that is not the selection selects it and copies
     fs.utimesSync(src, 2000, 2000);
     await main.onAction(V, 'copy:x:2');
     assert.strictEqual(calls.filter((c) => c.m === 'clipboard.write').length, 2, 'stale: nothing copied');
-    assert.ok(calls.some((c) => c.m === 'window.showBanner' && c.p.text === 'a prancheta mudou: espere a imagem nova'));
+    assert.ok(calls.some((c) => c.m === 'window.showBanner' && c.p.text === 'A tela mudou: espere a imagem nova'));
   } finally {
     await main.closeView(V.viewId);
     main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
@@ -502,7 +515,8 @@ test('rename: the label asks for a name (current title as value) and writes only
     const inp = calls.find((c) => c.m === 'window.input');
     assert.strictEqual(inp.p.value, 'Notificações');
     assert.strictEqual(inp.p.prompt, undefined);
-    assert.ok(inp.p.title && inp.p.placeholder);
+    assert.strictEqual(inp.p.title, 'Renomear tela');
+    assert.strictEqual(inp.p.placeholder, 'Nome da tela');
     assert.strictEqual(title(), 'Notificações 2');
     assert.deepStrictEqual(Object.keys(canvasMod.read(V.dir).boards), ['notificacoes']);
     assert.ok(fs.existsSync(path.join(V.dir, 'boards', 'notificacoes.html')));
@@ -516,6 +530,7 @@ test('rename: the label asks for a name (current title as value) and writes only
     reply = 'x'.repeat(121);
     await main.onAction(V, 'rename:notificacoes');
     assert.strictEqual(title(), 'Avisos', 'over 120 chars: no write');
+    assert.ok(calls.some((c) => c.m === 'window.showBanner' && c.p.text === 'O nome da tela passa de 120 caracteres'));
     // a concurrent edit while the dialog is open survives
     answer = async (m) => {
       if (m !== 'window.input') return { open: true };

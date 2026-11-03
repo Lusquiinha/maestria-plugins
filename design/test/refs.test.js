@@ -274,14 +274,14 @@ test('codeFor_refuses_when_source_newer_than_nodes', () => {
   assert.match(p, /^@n\d+$/);
   assert.match(r.codeFor('a', h2), /^@n\d+$/);
   at('boards/a.html', 3000);
-  assert.throws(() => r.codeFor('a', el('boards/a.html', [0, 1])), { message: 'a prancheta mudou: espere a imagem nova' });
+  assert.throws(() => r.codeFor('a', el('boards/a.html', [0, 1])), { message: 'A tela mudou: espere a imagem nova' });
   at('boards/a.html', 1000); at('components/Card.html', 3000);
-  assert.throws(() => r.codeFor('a', h2), { message: 'a prancheta mudou: espere a imagem nova' }, 'the component file');
+  assert.throws(() => r.codeFor('a', h2), { message: 'A tela mudou: espere a imagem nova' }, 'the component file');
   assert.strictEqual(r.codeFor('a', el('boards/a.html', [0, 1])), p, 'a file it does not come from does not matter');
   at('components/Card.html', 1000);
   const viaChanged = { ...h2, via: [{ file: 'boards/a.html', path: [0, 0], componentFile: 'components/Card.html' }] };
   at('boards/a.html', 3000);
-  assert.throws(() => r.codeFor('a', viaChanged), /a prancheta mudou/, 'the board holding the call');
+  assert.throws(() => r.codeFor('a', viaChanged), /A tela mudou/, 'the board holding the call');
   nodesAt(4000);
   assert.match(r.codeFor('a', viaChanged), /^@n\d+$/, 'the new render is in');
 });

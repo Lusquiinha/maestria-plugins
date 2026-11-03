@@ -153,7 +153,7 @@ class Refs {
       if (!FILE_RE.test(f)) continue;
       let at;
       try { at = fs.statSync(path.join(canvasDir, f)).mtimeMs; } catch { continue; }
-      if (at > mapAt) throw new Error('a prancheta mudou: espere a imagem nova');
+      if (at > mapAt) throw new Error('A tela mudou: espere a imagem nova');
     }
   }
 

@@ -220,16 +220,19 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], node
     } else zoom.command = 'fit';
   }
 
-  // the one menu of the bar: theme, follow and the boards (zoom is the wheel and the keys)
+  // the one menu of the bar: theme, follow and the boards (zoom is the wheel and the keys);
+  // a section title is a disabled row (an item without action is a divider)
   const check = (on) => (on ? { icon: 'check' } : {});
+  const section = (label) => ({ action: 'secao', label, disabled: true });
   const menu = [
-    { action: 'tema:light', label: 'claro', ...check(theme === 'light') },
-    { action: 'tema:dark', label: 'escuro', ...check(theme === 'dark') },
-    { action: 'tema:both', label: 'claro e escuro lado a lado', ...check(theme === 'both') },
+    section('Tema'),
+    { action: 'tema:light', label: 'Claro', ...check(theme === 'light') },
+    { action: 'tema:dark', label: 'Escuro', ...check(theme === 'dark') },
+    { action: 'tema:both', label: 'Claro e escuro lado a lado', ...check(theme === 'both') },
     { type: 'divider' },
-    { action: 'seguir', label: 'seguir o claude', ...check(!!ui.follow) },
+    { action: 'seguir', label: 'Ir até a tela que o Claude mudou', ...check(!!ui.follow) },
   ];
-  if (out.length) menu.push({ type: 'divider' }, ...out.map((b) => ({ action: b.focus, label: b.title, icon: 'layers' })));
+  if (out.length) menu.push({ type: 'divider' }, section('Telas'), ...out.map((b) => ({ action: b.focus, label: b.title, icon: 'layers' })));
 
   const selectData = select ? { panButtons: ['middle'] } : {};
   if (selections.length) selectData.selection = selections[0];

@@ -126,13 +126,17 @@ test('highlight flags only the named board', () => {
   assert.deepStrictEqual(d.boards.map((b) => b.highlight), [false, true]);
 });
 
-test('one menu: tema, seguir o claude and the boards; no zoom data', () => {
+test('one menu: Tema, follow Claude and Telas, in sentence case; no zoom data', () => {
   const d = build();
   assert.strictEqual(d.boards[0].focus, 'focus:a');
   assert.strictEqual(d.boards[0].rename, 'rename:a');
   for (const k of ['zoomLabel', 'themeLabel', 'themeMenu', 'listMenu', 'list']) assert.ok(!(k in d), `${k} still in the data`);
+  const shown = (m) => m.map((x) => (x.type === 'divider' ? '—' : x.label));
+  assert.deepStrictEqual(shown(d.menu), ['Tema', 'Claro', 'Escuro', 'Claro e escuro lado a lado', '—', 'Ir até a tela que o Claude mudou', '—', 'Telas', 'a', 'Toast pequeno']);
   const acts = d.menu.map((m) => m.action || m.type);
-  assert.deepStrictEqual(acts, ['tema:light', 'tema:dark', 'tema:both', 'divider', 'seguir', 'divider', 'focus:a', 'focus:b']);
+  assert.deepStrictEqual(acts, ['secao', 'tema:light', 'tema:dark', 'tema:both', 'divider', 'seguir', 'divider', 'secao', 'focus:a', 'focus:b']);
+  // the section titles are disabled rows (an item without action would be a divider)
+  for (const h of d.menu.filter((m) => m.action === 'secao')) assert.strictEqual(h.disabled, true);
   const item = (a, m = d.menu) => m.find((x) => x.action === a);
   assert.strictEqual(item('tema:both').icon, 'check'); // the current theme and follow on are checked
   assert.ok(!item('tema:light').icon);
@@ -142,17 +146,28 @@ test('one menu: tema, seguir o claude and the boards; no zoom data', () => {
   assert.strictEqual(item('tema:dark', off).icon, 'check');
   assert.ok(!item('seguir', off).icon);
   const empty = view.build({ canvas: { title: 'x', boards: {}, order: [], warnings: [] }, states: new Map(), ui: ui(), caps: CAPS, hash: HASH });
-  assert.deepStrictEqual(empty.menu.map((m) => m.action || m.type), ['tema:light', 'tema:dark', 'tema:both', 'divider', 'seguir']);
+  assert.deepStrictEqual(empty.menu.map((m) => m.action || m.type), ['secao', 'tema:light', 'tema:dark', 'tema:both', 'divider', 'seguir']);
   noNull(d);
 });
 
 test('the toolbar: the title and a single menu, no zoom buttons', () => {
   const lib = fs.readFileSync(path.join(__dirname, '..', 'ui', 'canvas.rfwtxt'), 'utf8').replace(/\/\/.*$/gm, '');
   assert.strictEqual((lib.match(/MenuButton\(/g) || []).length, 1);
-  assert.match(lib, /MenuButton\(icon: "more", tooltip: "[^"]+", menu: data\.menu, onMenu: event "act" \{\}\)/);
+  assert.match(lib, /MenuButton\(icon: "more", tooltip: "Tema, telas e acompanhar o Claude", menu: data\.menu, onMenu: event "act" \{\}\)/);
   for (const gone of ['zoom:in', 'zoom:out', 'zoom:fit', 'ajustar', 'zoomLabel', 'IconButton', 'Follow(']) {
     assert.ok(!lib.includes(gone), `${gone} still in the toolbar`);
   }
+});
+
+test('the visible copy of the canvas: sentence case, "tela" and never "prancheta"', () => {
+  const lib = fs.readFileSync(path.join(__dirname, '..', 'ui', 'canvas.rfwtxt'), 'utf8').replace(/\/\/.*$/gm, '');
+  const texts = [...lib.matchAll(/(?:text|tooltip): "([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(texts.length >= 2);
+  for (const t of texts) {
+    assert.ok(!/^\p{Ll}/u.test(t), `"${t}" starts lowercase`);
+    assert.ok(!/prancheta/i.test(t), `"${t}" says prancheta`);
+  }
+  assert.ok(texts.includes('Nenhuma tela ainda. Peça ao Claude numa sessão pra desenhar uma.'));
 });
 
 test('empty canvas still has a size and no nulls', () => {
@@ -193,7 +208,9 @@ test('manifest: id, main, activation events, commands', () => {
   assert.deepStrictEqual(m.main, ['node', 'main.js']);
   assert.deepStrictEqual(m.activationEvents, ['onCommand:abrir', 'onTool:design_open', 'onTool:design_board', 'onTool:design_render', 'onTool:design_focus', 'onTool:design_list', 'onTool:design_ref', 'onHook:PreToolUse']);
   assert.deepStrictEqual(m.permissions, ['sessions.create', 'hooks']);
-  assert.deepStrictEqual(m.contributes.commands, [{ id: 'abrir', title: 'design: abrir' }]);
+  assert.deepStrictEqual(m.contributes.commands, [{ id: 'abrir', title: 'Design: abrir canvas de telas…' }]);
+  assert.strictEqual(m.contributes.sidebar, true);
+  assert.doesNotMatch(m.description, /prancheta/);
   assert.ok(fs.existsSync(path.join(__dirname, '..', m.icon)));
 });
 
