@@ -486,3 +486,36 @@ test('right-click copy on a node that is not the selection selects it and copies
     main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
   }
 });
+
+test('rename: the label asks for a name (current title as value) and writes only the title', async () => {
+  const calls = [];
+  let reply = 'Notificações 2';
+  answer = async (m, p) => { calls.push({ m, p }); return m === 'window.input' ? reply : { open: true }; };
+  const V = await selCanvas('rename');
+  try {
+    const canvasMod = require('../lib/canvas');
+    fs.mkdirSync(path.join(V.dir, 'boards'), { recursive: true });
+    fs.writeFileSync(path.join(V.dir, 'boards', 'notificacoes.html'), '<p>x</p>');
+    canvasMod.write(V.dir, { v: 1, title: 't', boards: { notificacoes: { x: 0, y: 0, w: 400, title: 'Notificações' } }, order: ['notificacoes'] });
+    const title = () => canvasMod.read(V.dir).boards.notificacoes.title;
+    await main.onAction(V, 'rename:notificacoes');
+    const inp = calls.find((c) => c.m === 'window.input');
+    assert.strictEqual(inp.p.value, 'Notificações');
+    assert.strictEqual(inp.p.prompt, undefined);
+    assert.ok(inp.p.title && inp.p.placeholder);
+    assert.strictEqual(title(), 'Notificações 2');
+    assert.deepStrictEqual(Object.keys(canvasMod.read(V.dir).boards), ['notificacoes']);
+    assert.ok(fs.existsSync(path.join(V.dir, 'boards', 'notificacoes.html')));
+    for (reply of ['', '   ', null]) {
+      await main.onAction(V, 'rename:notificacoes');
+      assert.strictEqual(title(), 'Notificações 2', `no write for ${JSON.stringify(reply)}`);
+    }
+    reply = '  Avisos  ';
+    await main.onAction(V, 'rename:notificacoes');
+    assert.strictEqual(title(), 'Avisos');
+    await main.onAction(V, 'rename:nope'); // unknown board: nothing
+  } finally {
+    await main.closeView(V.viewId);
+    main.state.caps = { rfw: true, picture: 1, zoomFocus: 1 };
+  }
+});

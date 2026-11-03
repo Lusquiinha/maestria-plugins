@@ -138,6 +138,7 @@ function build({ canvas, states, ui = {}, caps = {}, hash = '', scans = [], node
     highlight: ui.highlight != null && ui.highlight === it.name,
     rev: (it.s && it.s.rev) || 0,
     focus: `focus:${it.name}`,
+    rename: `rename:${it.name}`,
   }));
 
   // A rect in image px of board i -> canvas px over each shown copy (both in

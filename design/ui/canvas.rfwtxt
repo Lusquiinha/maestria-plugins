@@ -182,42 +182,42 @@ widget Board = Positioned(
   start: args.b.left,
   top: args.b.top,
   width: args.b.frameWidth, // fixed: a long title is cut instead of widening the box
-  child: GestureDetector(
-    onDoubleTap: event "act" { a: args.b.focus },
-    child: Container(
-      decoration: {
-        type: "box",
-        border: [{ color: switch args.b.highlight { true: data.theme.accent, default: 0x00000000 }, width: 2.0 }],
-      },
-      child: Column(
-        mainAxisSize: "min",
-        crossAxisAlignment: "start",
-        children: [
-          SizedBox(
+  child: Container(
+    decoration: {
+      type: "box",
+      border: [{ color: switch args.b.highlight { true: data.theme.accent, default: 0x00000000 }, width: 2.0 }],
+    },
+    child: Column(
+      mainAxisSize: "min",
+      crossAxisAlignment: "start",
+      children: [
+        Pressable(
+          onDoubleTap: event "act" { a: args.b.rename },
+          child: SizedBox(
             height: 28.0,
             child: Text(text: args.b.title, maxLines: 1, overflow: "ellipsis", style: { fontSize: 16.0, color: data.theme.dim }),
           ),
-          Row(
-            mainAxisSize: "min",
-            crossAxisAlignment: "start",
-            children: [
-              switch args.b.showLight { true: Shot(path: args.b.light, w: args.b.imageWidth, h: args.b.imageHeight), default: SizedBox() },
-              switch args.b.gap { true: SizedBox(width: 24.0), default: SizedBox() },
-              switch args.b.showDark { true: Shot(path: args.b.dark, w: args.b.imageWidth, h: args.b.imageHeight), default: SizedBox() },
-            ],
-          ),
-          switch args.b.error {
-            "": SizedBox(),
-            default: SizedBox(
-              height: 56.0,
-              child: Padding(
-                padding: [0.0, 8.0, 0.0, 0.0],
-                child: Text(text: args.b.error, maxLines: 2, overflow: "ellipsis", style: { fontSize: 16.0, color: data.theme.red }),
-              ),
+        ),
+        Row(
+          mainAxisSize: "min",
+          crossAxisAlignment: "start",
+          children: [
+            switch args.b.showLight { true: Shot(path: args.b.light, w: args.b.imageWidth, h: args.b.imageHeight), default: SizedBox() },
+            switch args.b.gap { true: SizedBox(width: 24.0), default: SizedBox() },
+            switch args.b.showDark { true: Shot(path: args.b.dark, w: args.b.imageWidth, h: args.b.imageHeight), default: SizedBox() },
+          ],
+        ),
+        switch args.b.error {
+          "": SizedBox(),
+          default: SizedBox(
+            height: 56.0,
+            child: Padding(
+              padding: [0.0, 8.0, 0.0, 0.0],
+              child: Text(text: args.b.error, maxLines: 2, overflow: "ellipsis", style: { fontSize: 16.0, color: data.theme.red }),
             ),
-          },
-        ],
-      ),
+          ),
+        },
+      ],
     ),
   ),
 );

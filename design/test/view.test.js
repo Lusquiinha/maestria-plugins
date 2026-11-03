@@ -129,6 +129,7 @@ test('highlight flags only the named board', () => {
 test('one menu: tema, seguir o claude and the boards; no zoom data', () => {
   const d = build();
   assert.strictEqual(d.boards[0].focus, 'focus:a');
+  assert.strictEqual(d.boards[0].rename, 'rename:a');
   for (const k of ['zoomLabel', 'themeLabel', 'themeMenu', 'listMenu', 'list']) assert.ok(!(k in d), `${k} still in the data`);
   const acts = d.menu.map((m) => m.action || m.type);
   assert.deepStrictEqual(acts, ['tema:light', 'tema:dark', 'tema:both', 'divider', 'seguir', 'divider', 'focus:a', 'focus:b']);

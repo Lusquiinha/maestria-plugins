@@ -380,6 +380,18 @@ async function onAction(V, act, vals = {}) {
     }
     return render(V);
   }
+  if (verb === 'rename' && arg) {
+    let canvas;
+    try { canvas = canvasMod.read(V.dir); } catch (e) { return banner(errText(e)); }
+    const b = canvas.boards[arg];
+    if (!b) return null;
+    const current = typeof b.title === 'string' && b.title ? b.title : arg;
+    const name = await mx.request('window.input', { title: 'design: renomear tela', placeholder: 'Nome da tela', value: current });
+    const next = typeof name === 'string' ? name.trim() : '';
+    if (!next || next === current) return null;
+    canvasMod.write(V.dir, { ...canvas, boards: { ...canvas.boards, [arg]: { ...b, title: next } } });
+    return null; // the engine watches canvas.json and re-renders
+  }
   if (verb === 'copy') {
     const hit = nodeArg(V, arg);
     if (!hit) return null;
