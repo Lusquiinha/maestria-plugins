@@ -22,10 +22,10 @@ const sha1 = (s) => crypto.createHash('sha1').update(s).digest('hex');
 const samePath = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
 const site = (n) => ({ file: n.file, path: n.path, componentFile: n.componentFile || null });
 
-// The end of the element opened at `open` (counts nested same-name tags).
 // The message when a code is asked for while the image on screen is older than its source.
 const STALE_SCREEN = 'A tela mudou: espere a imagem nova';
 
+// The end of the element opened at `open` (counts nested same-name tags).
 function closeOf(html, open) {
   if (open.selfClosing || VOID.has(open.tag)) return open.end;
   const re = new RegExp(`<!--|<(/?)${open.tag}(?=[\\s/>])`, 'gi');
