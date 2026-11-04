@@ -4,6 +4,8 @@
 // `tool.call` a handle(); `ctx` vem de toolCtx() lá (os testes passam um falso):
 // { api, loggedIn, setting, pick, banner, now, sleep, schedule, budgetMs, pollMs, home, readPubKey, log }
 
+const fs = require('fs');
+const path = require('path');
 const { createCreateFlow } = require('./create-flow');
 
 const LOGIN_HINT = 'Entre no VM Manager pelo comando "vm-manager: entrar" e tente de novo.';
@@ -305,7 +307,45 @@ async function bucketList(_args, { api }) {
   });
 }
 
-const notYet = async () => fail('não implementado');
+async function bucketCreate({ name, owner, newOwner }, { api }) {
+  const body = { name: String(name || ''), owner: String(owner || '') };
+  if (newOwner !== undefined) body.newOwner = Boolean(newOwner);
+  const b = (await api.createBucket(body)) || {};
+  const out = { name: b.name || body.name, owner: b.owner || body.owner };
+  return ok({ bucket: out, next: `Para usar no servidor, chame bucket_credentials com owner "${out.owner}".` });
+}
+
+const OWNER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
+const ENV_VARS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'S3_ENDPOINT', 'S3_REGION'];
+const CRED_RULE = 'A secret key está só no arquivo. Copie-o para a VM com scp e use pelo caminho; não imprima o conteúdo (sem cat/echo/grep).';
+
+/** Grava o .env com a secret: pasta 0700, arquivo 0600 (apertado antes de escrever). */
+function writeSecretFile(file, text) {
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+  if (fs.existsSync(file)) fs.chmodSync(file, 0o600);
+  fs.writeFileSync(file, text, { mode: 0o600 });
+  fs.chmodSync(file, 0o600);
+}
+
+async function bucketCredentials({ owner }, ctx) {
+  const o = String(owner || '');
+  if (!OWNER.test(o) || o.includes('..')) throw new ToolError(`owner inválido: "${o}".`);
+  const c = (await ctx.api.credentials(o)) || {};
+  if (!c.accessKey) throw new ToolError(`O dono "${o}" não tem access key no RGW; crie pela tela do VM Manager.`);
+  const r = (await ctx.api.secret(o)) || {};
+  const secret = typeof r.secretKey === 'string' ? r.secretKey : '';
+  if (!secret) throw new ToolError(`A API não devolveu a secret key de "${o}".`);
+  const file = path.join(ctx.home, '.config', 'maestria-vm-manager', 'credentials', `${o}.env`);
+  try {
+    writeSecretFile(file, `AWS_ACCESS_KEY_ID=${c.accessKey}\nAWS_SECRET_ACCESS_KEY=${secret}\nS3_ENDPOINT=${c.endpoint}\nS3_REGION=${c.region}\n`);
+  } catch (e) {
+    // Só o código do erro: nada do conteúdo vai pra mensagem.
+    throw new ToolError(`Não deu pra gravar ${file}: ${(e && e.code) || 'erro'}.`);
+  }
+  return ok({ file, accessKey: c.accessKey, endpoint: c.endpoint, region: c.region, variables: ENV_VARS, message: CRED_RULE });
+}
 
 const HANDLERS = {
   vm_list: vmList,
@@ -317,8 +357,8 @@ const HANDLERS = {
   vm_stop: vmStop,
   vm_destroy: vmDestroy,
   bucket_list: bucketList,
-  bucket_create: notYet,
-  bucket_credentials: notYet,
+  bucket_create: bucketCreate,
+  bucket_credentials: bucketCredentials,
 };
 
 async function handle(name, args, ctx) {

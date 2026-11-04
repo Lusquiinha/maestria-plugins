@@ -376,3 +376,115 @@ test('destroy schema has no way to skip the confirmation', () => {
   const s = tools.SCHEMAS.find((x) => x.name === 'vm_destroy');
   assert.deepEqual(Object.keys(s.inputSchema.properties), ['vm']);
 });
+
+// --- buckets: criar e credenciais ----------------------------------------------------------
+
+const SECRET = 'SEKRET-xyz';
+const bucketApi = (over = {}) => ({
+  createBucket: async (b) => ({ name: b.name, owner: b.owner, objects: 0, usedBytes: 0, quotaBytes: null, secretKey: SECRET }),
+  credentials: async (owner) => ({ owner, endpoint: 'https://s3.cefis.cloud', region: 'us-east-1', accessKey: 'AK123' }),
+  secret: async () => ({ secretKey: SECRET }),
+  ...over,
+});
+const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'vmm-tools-home-'));
+
+test('bucket_credentials writes 0600 file in 0700 dir with the four variables', async () => {
+  const home = tmpHome();
+  try {
+    const { ctx } = makeCtx({ home, api: bucketApi() });
+    const r = await tools.handle('bucket_credentials', { owner: 'uplii' }, ctx);
+    assert.equal(r.isError, undefined, text(r));
+    const out = json(r);
+    const file = path.join(home, '.config', 'maestria-vm-manager', 'credentials', 'uplii.env');
+    assert.equal(out.file, file);
+    assert.equal(out.accessKey, 'AK123');
+    assert.equal(out.endpoint, 'https://s3.cefis.cloud');
+    assert.deepEqual(out.variables, ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'S3_ENDPOINT', 'S3_REGION']);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
+    assert.equal(
+      fs.readFileSync(file, 'utf8'),
+      'AWS_ACCESS_KEY_ID=AK123\nAWS_SECRET_ACCESS_KEY=SEKRET-xyz\nS3_ENDPOINT=https://s3.cefis.cloud\nS3_REGION=us-east-1\n',
+    );
+    assert.match(out.message, /não imprima o conteúdo/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('bucket_credentials overwrites a loose file and tightens it to 0600', async () => {
+  const home = tmpHome();
+  try {
+    const dir = path.join(home, '.config', 'maestria-vm-manager', 'credentials');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
+    fs.writeFileSync(path.join(dir, 'uplii.env'), 'velho', { mode: 0o644 });
+    const { ctx } = makeCtx({ home, api: bucketApi() });
+    await tools.handle('bucket_credentials', { owner: 'uplii' }, ctx);
+    assert.equal(fs.statSync(path.join(dir, 'uplii.env')).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+    assert.doesNotMatch(fs.readFileSync(path.join(dir, 'uplii.env'), 'utf8'), /velho/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('bucket_credentials result and logs never contain the secret', async () => {
+  const home = tmpHome();
+  try {
+    const { ctx, logs } = makeCtx({ home, api: bucketApi() });
+    const r = await tools.handle('bucket_credentials', { owner: 'uplii' }, ctx);
+    assert.doesNotMatch(text(r), /SEKRET/);
+    assert.doesNotMatch(logs.join('\n'), /SEKRET/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('bucket_credentials error never carries the secret', async () => {
+  const home = tmpHome();
+  try {
+    const { ctx, logs } = makeCtx({
+      home: path.join(home, 'nao-existe', '\0'),
+      api: bucketApi(),
+    });
+    const r = await tools.handle('bucket_credentials', { owner: 'uplii' }, ctx);
+    assert.equal(r.isError, true);
+    assert.doesNotMatch(text(r), /SEKRET/);
+    assert.doesNotMatch(logs.join('\n'), /SEKRET/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('bucket_credentials rejects owner with / or ..', async () => {
+  for (const owner of ['../x', 'a/b', '..', '.hidden', '']) {
+    const { ctx, calls } = makeCtx({ api: bucketApi() });
+    const r = await tools.handle('bucket_credentials', { owner }, ctx);
+    assert.equal(r.isError, true, owner);
+    assert.equal(calls.length, 0, owner);
+  }
+});
+
+test('bucket_credentials without access key says so and writes nothing', async () => {
+  const home = tmpHome();
+  try {
+    const { ctx, calls } = makeCtx({ home, api: bucketApi({ credentials: async (owner) => ({ owner, endpoint: 'e', region: 'r', accessKey: null }) }) });
+    const r = await tools.handle('bucket_credentials', { owner: 'uplii' }, ctx);
+    assert.equal(r.isError, true);
+    assert.equal(calls.filter((c) => c.k === 'secret').length, 0);
+    assert.equal(fs.existsSync(path.join(home, '.config')), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('bucket_create never returns the secret and hints bucket_credentials', async () => {
+  const { ctx, calls } = makeCtx({ api: bucketApi() });
+  const r = await tools.handle('bucket_create', { name: 'backups-ch', owner: 'uplii', newOwner: true }, ctx);
+  assert.equal(r.isError, undefined, text(r));
+  assert.doesNotMatch(text(r), /SEKRET/);
+  const out = json(r);
+  assert.deepEqual(out.bucket, { name: 'backups-ch', owner: 'uplii' });
+  assert.equal(out.next, 'Para usar no servidor, chame bucket_credentials com owner "uplii".');
+  assert.deepEqual(calls[0].a[0], { name: 'backups-ch', owner: 'uplii', newOwner: true });
+});
