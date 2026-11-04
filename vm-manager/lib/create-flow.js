@@ -47,13 +47,14 @@ function createCreateFlow({ api, now, schedule, pollMs = 5000, maxMs = 600000 })
     }
   }
 
-  function track() {
+  // `known`: a criação já foi vista (follow): 404 sem registro → confere na lista.
+  function track(known = false) {
     const g = gen;
     const put = (patch) => {
       if (g === gen) set(patch);
     };
     const name = st.name;
-    let sawRunning = false;
+    let sawRunning = known;
 
     const finishFound = (vm) =>
       put({
@@ -124,6 +125,13 @@ function createCreateFlow({ api, now, schedule, pollMs = 5000, maxMs = 600000 })
     })();
   }
 
+  // Acompanha uma criação já em curso pelo nome, sem POST (o vm_wait das ferramentas).
+  function follow(name) {
+    if (st.phase !== 'idle') return;
+    set({ phase: 'tracking', name: String(name || ''), result: null, error: '', startedAt: now() });
+    track(true);
+  }
+
   function reset() {
     if (!FINAL.has(st.phase)) return false;
     set({ phase: 'idle', name: '', result: null, error: '', startedAt: 0 });
@@ -142,6 +150,7 @@ function createCreateFlow({ api, now, schedule, pollMs = 5000, maxMs = 600000 })
   return {
     state: () => ({ ...st }),
     submit,
+    follow,
     reset,
     abandon,
     onChange(fn) {

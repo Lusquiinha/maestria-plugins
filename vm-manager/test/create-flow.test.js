@@ -321,3 +321,38 @@ test('abandon during the POST: the late answer is ignored and a new submit works
   assert.equal(s.phase, 'succeeded');
   assert.equal(s.result.vm.vmid, 2);
 });
+
+test('follow tracks an existing creation without posting', async () => {
+  const { flow, clock, calls } = setup({
+    create: async () => ({}),
+    creations: [{ status: 'succeeded', result: { vm: { vmid: 300, name: 'ch-1' } } }],
+  });
+  flow.follow('ch-1');
+  assert.equal(flow.state().phase, 'tracking');
+  assert.equal(flow.state().name, 'ch-1');
+  await clock.advance(5000);
+  assert.equal(flow.state().phase, 'succeeded');
+  assert.equal(flow.state().result.vm.vmid, 300);
+  assert.equal(calls.create, 0);
+});
+
+test('follow with no creation record finds the VM in the list', async () => {
+  const { flow, clock, calls } = setup({
+    create: async () => ({}),
+    creations: [new ApiError('não achei', 404)],
+    vms: async () => [{ vmid: 301, name: 'ch-2' }],
+  });
+  flow.follow('ch-2');
+  await clock.advance(5000);
+  assert.equal(flow.state().phase, 'succeeded');
+  assert.equal(flow.state().result.vm.vmid, 301);
+  assert.equal(calls.create, 0);
+});
+
+test('follow is a no-op when not idle', () => {
+  const { flow } = setup({ create: () => new Promise(() => {}) });
+  flow.submit(BODY);
+  flow.follow('x');
+  assert.equal(flow.state().name, 'a');
+  assert.equal(flow.state().phase, 'submitting');
+});
