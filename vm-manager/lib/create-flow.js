@@ -92,7 +92,7 @@ function createCreateFlow({ api, now, schedule, pollMs = 5000, maxMs = 600000 })
         if (vm) return finishFound(vm);
         if (followed) {
           // vm_wait sem registro nem VM: não há o que esperar.
-          put({ phase: 'unconfirmed', error: `Nenhuma criação em andamento nem VM chamada "${name}"; confira com vm_list.` });
+          put({ phase: 'unconfirmed', error: `Nenhuma criação em andamento nem VM chamada "${name}"; confira com vm_manager_list.` });
           return;
         }
       }

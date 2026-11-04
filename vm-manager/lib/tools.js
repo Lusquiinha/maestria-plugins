@@ -1,5 +1,5 @@
 'use strict';
-// As ferramentas MCP que o Claude ganha numa sessão do Maestria (`vm_*`, `bucket_*`):
+// As ferramentas MCP que o Claude ganha numa sessão do Maestria (`vm_manager_*`):
 // as mesmas operações da tela, com a sessão "Entrar com Marrow" do plugin. main.js liga
 // `tool.call` a handle(); `ctx` vem de toolCtx() lá (os testes passam um falso):
 // { api, loggedIn, setting, pick, banner, now, sleep, schedule, budgetMs, pollMs, home, readPubKey, log }
@@ -9,30 +9,30 @@ const path = require('path');
 const { createCreateFlow } = require('./create-flow');
 
 const LOGIN_HINT = 'Entre no VM Manager pelo comando "vm-manager: entrar" e tente de novo.';
-const resumeHint = (name) => `Sua sessão do VM Manager caiu. Entre pelo comando "vm-manager: entrar" e depois chame vm_wait com name "${name}"; não chame vm_create de novo.`;
+const resumeHint = (name) => `Sua sessão do VM Manager caiu. Entre pelo comando "vm-manager: entrar" e depois chame vm_manager_wait com name "${name}"; não chame vm_manager_create de novo.`;
 const FORBIDDEN = 'Seu papel no console não permite isso.';
 
 const VM_REF = { type: ['integer', 'string'], description: 'VM id (number) or exact VM name.' };
 
 const SCHEMAS = [
   {
-    name: 'vm_list',
-    description: 'List the VMs of the CCS Proxmox cluster (vmid, name, type, status, node, size, IP, tags). Templates are left out. Use it to find a VM before vm_get/vm_start/vm_stop/vm_destroy.',
+    name: 'vm_manager_list',
+    description: 'List the VMs of the CCS Proxmox cluster (vmid, name, type, status, node, size, IP, tags). Templates are left out. Use it to find a VM before vm_manager_get/vm_manager_start/vm_manager_stop/vm_manager_destroy.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
-    name: 'vm_get',
+    name: 'vm_manager_get',
     description: 'Details of one VM by vmid or exact name: status, size, IP, disks, OS type and guest agent.',
     inputSchema: { type: 'object', properties: { vm: VM_REF }, required: ['vm'], additionalProperties: false },
   },
   {
-    name: 'vm_catalog',
-    description: 'What a new VM can use: nodes, storages, templates, the environment defaults (cores, memory MiB, disk GiB) and the SSH user of new VMs. Read it before vm_create to pick a sensible size.',
+    name: 'vm_manager_catalog',
+    description: 'What a new VM can use: nodes, storages, templates, the environment defaults (cores, memory MiB, disk GiB) and the SSH user of new VMs. Read it before vm_manager_create to pick a sensible size.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
-    name: 'vm_create',
-    description: 'Create a VM (clone + cloud-init + NetBox) and wait until it is ready with an IP, for up to ~100 s. Your local SSH public key is added, and the result has `ssh` (user@ip) ready to use. If it is still creating, the result says "em andamento": call vm_wait with the same name. Never call vm_create again for the same name.',
+    name: 'vm_manager_create',
+    description: 'Create a VM (clone + cloud-init + NetBox) and wait until it is ready with an IP, for up to ~100 s. Your local SSH public key is added, and the result has `ssh` (user@ip) ready to use. If it is still creating, the result says "em andamento": call vm_manager_wait with the same name. Never call vm_manager_create again for the same name.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -40,9 +40,9 @@ const SCHEMAS = [
         cores: { type: 'integer', description: 'vCPU cores (1-64). Omit for the default.' },
         memoryMiB: { type: 'integer', description: 'Memory in MiB (512-524288). Omit for the default.' },
         diskGiB: { type: 'integer', description: 'Root disk in GiB (4-2048). Omit for the default.' },
-        template: { type: 'string', description: 'Template to clone (from vm_catalog). Omit for the default.' },
-        node: { type: 'string', description: 'Target node (from vm_catalog). Omit for the default.' },
-        storage: { type: 'string', description: 'Disk storage (from vm_catalog). Omit for the default.' },
+        template: { type: 'string', description: 'Template to clone (from vm_manager_catalog). Omit for the default.' },
+        node: { type: 'string', description: 'Target node (from vm_manager_catalog). Omit for the default.' },
+        storage: { type: 'string', description: 'Disk storage (from vm_manager_catalog). Omit for the default.' },
         ipCidr: { type: 'string', description: 'IPv4 with CIDR, e.g. 192.168.100.80/24. Omit to get the next free IP.' },
         backup: { type: 'boolean', description: 'Include in the daily backup. Default true.' },
         ha: { type: 'boolean', description: 'Include in the cluster HA. Default true.' },
@@ -53,43 +53,43 @@ const SCHEMAS = [
     },
   },
   {
-    name: 'vm_wait',
-    description: 'Keep waiting (up to ~100 s per call) for a VM creation that vm_create left "em andamento". Never creates anything.',
+    name: 'vm_manager_wait',
+    description: 'Keep waiting (up to ~100 s per call) for a VM creation that vm_manager_create left "em andamento". Never creates anything.',
     inputSchema: {
       type: 'object',
-      properties: { name: { type: 'string', description: 'The name passed to vm_create.' } },
+      properties: { name: { type: 'string', description: 'The name passed to vm_manager_create.' } },
       required: ['name'],
       additionalProperties: false,
     },
   },
   {
-    name: 'vm_start',
+    name: 'vm_manager_start',
     description: 'Start a VM.',
     inputSchema: { type: 'object', properties: { vm: VM_REF }, required: ['vm'], additionalProperties: false },
   },
   {
-    name: 'vm_stop',
+    name: 'vm_manager_stop',
     description: 'Shut a VM down (ACPI).',
     inputSchema: { type: 'object', properties: { vm: VM_REF }, required: ['vm'], additionalProperties: false },
   },
   {
-    name: 'vm_destroy',
+    name: 'vm_manager_destroy',
     description: 'Destroy a VM and remove it from NetBox. The user is always asked to confirm in Maestria; if they cancel or do not answer in time, nothing is destroyed. Only VMs, not containers or templates.',
     inputSchema: { type: 'object', properties: { vm: VM_REF }, required: ['vm'], additionalProperties: false },
   },
   {
-    name: 'bucket_list',
+    name: 'vm_manager_bucket_list',
     description: 'List the S3 buckets (name, owner, objects, used bytes, quota) and the owners a new bucket can have.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
-    name: 'bucket_create',
-    description: 'Create an S3 bucket for an existing owner, or for a new owner with newOwner=true. Returns no secret: use bucket_credentials to get the keys into a file.',
+    name: 'vm_manager_bucket_create',
+    description: 'Create an S3 bucket for an existing owner, or for a new owner with newOwner=true. Returns no secret: use vm_manager_bucket_credentials to get the keys into a file.',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Bucket name.' },
-        owner: { type: 'string', description: 'Owner uid (from bucket_list), or the new owner uid.' },
+        owner: { type: 'string', description: 'Owner uid (from vm_manager_bucket_list), or the new owner uid.' },
         newOwner: { type: 'boolean', description: 'Create the owner too. Default false.' },
       },
       required: ['name', 'owner'],
@@ -97,11 +97,11 @@ const SCHEMAS = [
     },
   },
   {
-    name: 'bucket_credentials',
+    name: 'vm_manager_bucket_credentials',
     description: 'Write the S3 credentials of a bucket owner to a local .env file (mode 0600) and return only its path, the access key and the endpoint. The secret key is only in the file: copy the file to the server with scp and use it by path. Never print its contents (no cat, echo or grep of the secret).',
     inputSchema: {
       type: 'object',
-      properties: { owner: { type: 'string', description: 'Owner uid (from bucket_list).' } },
+      properties: { owner: { type: 'string', description: 'Owner uid (from vm_manager_bucket_list).' } },
       required: ['owner'],
       additionalProperties: false,
     },
@@ -190,7 +190,7 @@ async function vmCatalog(_args, { api, setting }) {
 // --- criar e esperar ----------------------------------------------------------------------
 
 const HOSTNAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
-const NO_IP = 'A VM ainda não tem IP; use vm_get em instantes.';
+const NO_IP = 'A VM ainda não tem IP; use vm_manager_get em instantes.';
 const NO_KEY = 'Nenhuma chave SSH pública local (~/.ssh/id_ed25519.pub): a VM saiu só com as chaves padrão do ambiente.';
 const FINAL = new Set(['succeeded', 'rejected', 'failed', 'unconfirmed']);
 
@@ -225,7 +225,7 @@ async function settle(flow, name, ctx, warnings) {
     const left = deadline - ctx.now();
     if (left <= 0) {
       flow.abandon();
-      return ok({ status: 'em andamento', name, next: `Ainda criando. Chame vm_wait com name "${name}".`, warnings });
+      return ok({ status: 'em andamento', name, next: `Ainda criando. Chame vm_manager_wait com name "${name}".`, warnings });
     }
     await ctx.sleep(Math.min(ctx.pollMs, left));
   }
@@ -234,7 +234,7 @@ async function settle(flow, name, ctx, warnings) {
 const newFlow = (ctx) =>
   createCreateFlow({ api: ctx.api, now: ctx.now, schedule: ctx.schedule, pollMs: ctx.pollMs, maxMs: ctx.createMaxMs || 600000 });
 
-// Quando cada criação começou: o prazo de 10 min vale pela criação toda, entre chamadas de vm_wait.
+// Quando cada criação começou: o prazo de 10 min vale pela criação toda, entre chamadas de vm_manager_wait.
 const startedAt = new Map();
 
 async function vmCreate(args, ctx) {
@@ -255,7 +255,7 @@ async function vmCreate(args, ctx) {
 
 async function vmWait({ name }, ctx) {
   const n = String(name || '');
-  if (!n) throw new ToolError('Diga o name usado no vm_create.');
+  if (!n) throw new ToolError('Diga o name usado no vm_manager_create.');
   const flow = newFlow(ctx);
   if (!startedAt.has(n)) startedAt.set(n, ctx.now());
   flow.follow(n, startedAt.get(n));
@@ -315,7 +315,7 @@ async function vmDestroy({ vm }, ctx) {
     await ctx.api.destroyVm(v.vmid);
   } catch (e) {
     if (e && e.kind === 'timeout') {
-      return ok(`Pedido de destruir a vm ${v.vmid} (${v.name}) enviado, mas a API não respondeu a tempo; confira com vm_list se ela sumiu.`);
+      return ok(`Pedido de destruir a vm ${v.vmid} (${v.name}) enviado, mas a API não respondeu a tempo; confira com vm_manager_list se ela sumiu.`);
     }
     throw e;
   }
@@ -337,7 +337,7 @@ async function bucketCreate({ name, owner, newOwner }, { api }) {
   if (newOwner !== undefined) body.newOwner = Boolean(newOwner);
   const b = (await api.createBucket(body)) || {};
   const out = { name: b.name || body.name, owner: b.owner || body.owner };
-  return ok({ bucket: out, next: `Para usar no servidor, chame bucket_credentials com owner "${out.owner}".` });
+  return ok({ bucket: out, next: `Para usar no servidor, chame vm_manager_bucket_credentials com owner "${out.owner}".` });
 }
 
 const OWNER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
@@ -373,17 +373,17 @@ async function bucketCredentials({ owner }, ctx) {
 }
 
 const HANDLERS = {
-  vm_list: vmList,
-  vm_get: vmGet,
-  vm_catalog: vmCatalog,
-  vm_create: vmCreate,
-  vm_wait: vmWait,
-  vm_start: vmStart,
-  vm_stop: vmStop,
-  vm_destroy: vmDestroy,
-  bucket_list: bucketList,
-  bucket_create: bucketCreate,
-  bucket_credentials: bucketCredentials,
+  vm_manager_list: vmList,
+  vm_manager_get: vmGet,
+  vm_manager_catalog: vmCatalog,
+  vm_manager_create: vmCreate,
+  vm_manager_wait: vmWait,
+  vm_manager_start: vmStart,
+  vm_manager_stop: vmStop,
+  vm_manager_destroy: vmDestroy,
+  vm_manager_bucket_list: bucketList,
+  vm_manager_bucket_create: bucketCreate,
+  vm_manager_bucket_credentials: bucketCredentials,
 };
 
 async function handle(name, args, ctx) {
