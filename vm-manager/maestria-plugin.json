@@ -1,7 +1,7 @@
 {
   "id": "maestria.vm-manager",
   "name": "VM Manager",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "O CCS Console numa tela própria: as VMs do Proxmox, o Ceph, os buckets, as rotas do OPNsense, os usuários e a auditoria, com o login \"Entrar com Marrow\" em um clique.",
   "author": "Arthur Fonseca",
   "maestria": 1,
@@ -14,7 +14,18 @@
     "onCommand:abrir",
     "onCommand:nova",
     "onCommand:entrar",
-    "onCommand:sair"
+    "onCommand:sair",
+    "onTool:vm_list",
+    "onTool:vm_get",
+    "onTool:vm_catalog",
+    "onTool:vm_create",
+    "onTool:vm_wait",
+    "onTool:vm_start",
+    "onTool:vm_stop",
+    "onTool:vm_destroy",
+    "onTool:bucket_list",
+    "onTool:bucket_create",
+    "onTool:bucket_credentials"
   ],
   "permissions": [],
   "contributes": {
@@ -45,6 +56,238 @@
         "type": "string",
         "default": "https://vm-manager.cefis.cloud",
         "title": "endereço do console"
+      },
+      {
+        "id": "sshUser",
+        "type": "string",
+        "default": "ubuntu",
+        "title": "usuário SSH das VMs novas"
+      }
+    ],
+    "tools": [
+      {
+        "name": "vm_list",
+        "description": "List the VMs of the CCS Proxmox cluster (vmid, name, type, status, node, size, IP, tags). Templates are left out. Use it to find a VM before vm_get/vm_start/vm_stop/vm_destroy.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "vm_get",
+        "description": "Details of one VM by vmid or exact name: status, size, IP, disks, OS type and guest agent.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "vm": {
+              "type": [
+                "integer",
+                "string"
+              ],
+              "description": "VM id (number) or exact VM name."
+            }
+          },
+          "required": [
+            "vm"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "vm_catalog",
+        "description": "What a new VM can use: nodes, storages, templates, the environment defaults (cores, memory MiB, disk GiB) and the SSH user of new VMs. Read it before vm_create to pick a sensible size.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "vm_create",
+        "description": "Create a VM (clone + cloud-init + NetBox) and wait until it is ready with an IP, for up to ~100 s. Your local SSH public key is added, and the result has `ssh` (user@ip) ready to use. If it is still creating, the result says \"em andamento\": call vm_wait with the same name. Never call vm_create again for the same name.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "VM hostname: lowercase letters, digits and hyphen (1-63 chars)."
+            },
+            "cores": {
+              "type": "integer",
+              "description": "vCPU cores (1-64). Omit for the default."
+            },
+            "memoryMiB": {
+              "type": "integer",
+              "description": "Memory in MiB (512-524288). Omit for the default."
+            },
+            "diskGiB": {
+              "type": "integer",
+              "description": "Root disk in GiB (4-2048). Omit for the default."
+            },
+            "template": {
+              "type": "string",
+              "description": "Template to clone (from vm_catalog). Omit for the default."
+            },
+            "node": {
+              "type": "string",
+              "description": "Target node (from vm_catalog). Omit for the default."
+            },
+            "storage": {
+              "type": "string",
+              "description": "Disk storage (from vm_catalog). Omit for the default."
+            },
+            "ipCidr": {
+              "type": "string",
+              "description": "IPv4 with CIDR, e.g. 192.168.100.80/24. Omit to get the next free IP."
+            },
+            "backup": {
+              "type": "boolean",
+              "description": "Include in the daily backup. Default true."
+            },
+            "ha": {
+              "type": "boolean",
+              "description": "Include in the cluster HA. Default true."
+            },
+            "startAfterCreate": {
+              "type": "boolean",
+              "description": "Start the VM after creating. Default true."
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "vm_wait",
+        "description": "Keep waiting (up to ~100 s per call) for a VM creation that vm_create left \"em andamento\". Never creates anything.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The name passed to vm_create."
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "vm_start",
+        "description": "Start a VM.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "vm": {
+              "type": [
+                "integer",
+                "string"
+              ],
+              "description": "VM id (number) or exact VM name."
+            }
+          },
+          "required": [
+            "vm"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "vm_stop",
+        "description": "Shut a VM down (ACPI).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "vm": {
+              "type": [
+                "integer",
+                "string"
+              ],
+              "description": "VM id (number) or exact VM name."
+            }
+          },
+          "required": [
+            "vm"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "vm_destroy",
+        "description": "Destroy a VM and remove it from NetBox. The user is always asked to confirm in Maestria; if they cancel or do not answer in time, nothing is destroyed. Only VMs, not containers or templates.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "vm": {
+              "type": [
+                "integer",
+                "string"
+              ],
+              "description": "VM id (number) or exact VM name."
+            }
+          },
+          "required": [
+            "vm"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "bucket_list",
+        "description": "List the S3 buckets (name, owner, objects, used bytes, quota) and the owners a new bucket can have.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "bucket_create",
+        "description": "Create an S3 bucket for an existing owner, or for a new owner with newOwner=true. Returns no secret: use bucket_credentials to get the keys into a file.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Bucket name."
+            },
+            "owner": {
+              "type": "string",
+              "description": "Owner uid (from bucket_list), or the new owner uid."
+            },
+            "newOwner": {
+              "type": "boolean",
+              "description": "Create the owner too. Default false."
+            }
+          },
+          "required": [
+            "name",
+            "owner"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "bucket_credentials",
+        "description": "Write the S3 credentials of a bucket owner to a local .env file (mode 0600) and return only its path, the access key and the endpoint. The secret key is only in the file: copy the file to the server with scp and use it by path. Never print its contents (no cat, echo or grep of the secret).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "description": "Owner uid (from bucket_list)."
+            }
+          },
+          "required": [
+            "owner"
+          ],
+          "additionalProperties": false
+        }
       }
     ]
   }

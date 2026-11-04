@@ -1,0 +1,191 @@
+'use strict';
+
+// As ferramentas MCP (vm_*, bucket_*): ctx falso, api de objetos simples.
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { ApiError } = require('../lib/http');
+const tools = require('../lib/tools');
+
+const NAMES = [
+  'vm_list', 'vm_get', 'vm_catalog', 'vm_create', 'vm_wait', 'vm_start', 'vm_stop', 'vm_destroy',
+  'bucket_list', 'bucket_create', 'bucket_credentials',
+];
+const LOGIN_HINT = 'Entre no VM Manager pelo comando "vm-manager: entrar" e tente de novo.';
+
+const VM = (over = {}) => ({
+  vmid: 177, type: 'qemu', name: 'jibri-1', node: 'pve1', status: 'running', isTemplate: false,
+  cores: 2, memoryMiB: 4096, diskGiB: 40, ipConfigured: '192.168.100.80/24', ipDetected: null, tags: ['prod'],
+  ...over,
+});
+
+function makeCtx(over = {}) {
+  const calls = [];
+  const logs = [];
+  const banners = [];
+  const ctx = {
+    api: {},
+    loggedIn: () => true,
+    setting: (id, fallback) => (over.settings && over.settings[id] !== undefined ? over.settings[id] : fallback),
+    pick: async () => null,
+    banner: async (t) => banners.push(t),
+    now: Date.now,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    schedule: (fn, ms) => {
+      const t = setTimeout(fn, ms);
+      return () => clearTimeout(t);
+    },
+    budgetMs: 2000,
+    pollMs: 5,
+    home: os.tmpdir(),
+    readPubKey: async () => 'ssh-ed25519 AAAAPUB arthur@pc',
+    log: (...a) => logs.push(a.join(' ')),
+    ...over,
+  };
+  // Conta toda chamada à api.
+  const api = {};
+  for (const [k, fn] of Object.entries(ctx.api)) {
+    api[k] = async (...a) => {
+      calls.push({ k, a });
+      return fn(...a);
+    };
+  }
+  ctx.api = api;
+  return { ctx, calls, logs, banners };
+}
+
+const text = (r) => r.content.map((c) => c.text || '').join('\n');
+const json = (r) => JSON.parse(r.content[0].text);
+
+// --- esquemas e manifesto ---------------------------------------------------------
+
+test('schemas: 11 names, object inputSchema, english descriptions', () => {
+  assert.deepEqual(tools.SCHEMAS.map((s) => s.name), NAMES);
+  for (const s of tools.SCHEMAS) {
+    assert.equal(s.inputSchema.type, 'object', s.name);
+    assert.equal(s.inputSchema.additionalProperties, false, s.name);
+    assert.match(s.description, /^[A-Z][a-z]/, s.name);
+    assert.doesNotMatch(s.description, /[ãçõé]/, `${s.name} em inglês`);
+  }
+});
+
+test('manifest tools equal tools.SCHEMAS and every tool activates the plugin', () => {
+  const m = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'maestria-plugin.json'), 'utf8'));
+  assert.deepEqual(m.contributes.tools, tools.SCHEMAS);
+  for (const n of NAMES) assert.ok(m.activationEvents.includes(`onTool:${n}`), n);
+  const ssh = m.contributes.settings.find((s) => s.id === 'sshUser');
+  assert.equal(ssh.default, 'ubuntu');
+  assert.equal(m.version, '1.1.0');
+});
+
+// --- sessão e erros -----------------------------------------------------------------
+
+test('no session → login hint and no api call, for every tool', async () => {
+  const { ctx, calls } = makeCtx({ loggedIn: () => false, api: { vms: async () => [] } });
+  for (const n of NAMES) {
+    const r = await tools.handle(n, { vm: 1, name: 'a', owner: 'o' }, ctx);
+    assert.equal(r.isError, true, n);
+    assert.equal(text(r), LOGIN_HINT, n);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('401 becomes the login hint', async () => {
+  const { ctx } = makeCtx({ api: { vms: async () => { throw new ApiError('Unauthorized', 401); } } });
+  const r = await tools.handle('vm_list', {}, ctx);
+  assert.equal(r.isError, true);
+  assert.equal(text(r), LOGIN_HINT);
+});
+
+test('403 becomes the role message', async () => {
+  const { ctx } = makeCtx({ api: { vms: async () => { throw new ApiError('Forbidden resource', 403, { nest: true }); } } });
+  const r = await tools.handle('vm_list', {}, ctx);
+  assert.equal(r.isError, true);
+  assert.match(text(r), /^Seu papel no console não permite isso\./);
+  assert.match(text(r), /Forbidden resource/);
+});
+
+test('no result text ever contains the bearer token', async () => {
+  const { ctx, logs } = makeCtx({ api: { vms: async () => { throw new ApiError('falhou com Authorization: Bearer tok123', 502); } } });
+  const r = await tools.handle('vm_list', {}, ctx);
+  assert.equal(r.isError, true);
+  assert.doesNotMatch(text(r), /tok123/);
+  assert.doesNotMatch(logs.join('\n'), /tok123/);
+});
+
+test('unknown tool is an error', async () => {
+  const { ctx } = makeCtx();
+  const r = await tools.handle('vm_explode', {}, ctx);
+  assert.equal(r.isError, true);
+});
+
+// --- leitura ---------------------------------------------------------------------------
+
+test('vm_list hides templates and returns ip without CIDR', async () => {
+  const { ctx } = makeCtx({
+    api: { vms: async () => [VM(), VM({ vmid: 9000, name: 'ubuntu-tpl', isTemplate: true }), VM({ vmid: 178, name: 'db', ipConfigured: null, ipDetected: '10.0.0.9' })] },
+  });
+  const r = await tools.handle('vm_list', {}, ctx);
+  const out = json(r);
+  assert.deepEqual(out.vms.map((v) => v.vmid), [177, 178]);
+  assert.equal(out.vms[0].ip, '192.168.100.80');
+  assert.equal(out.vms[1].ip, '10.0.0.9');
+  assert.deepEqual(Object.keys(out.vms[0]).sort(), ['cores', 'diskGiB', 'ip', 'memoryMiB', 'name', 'node', 'status', 'tags', 'type', 'vmid']);
+});
+
+test('vm_get by vmid returns the detail', async () => {
+  const { ctx } = makeCtx({
+    api: { vm: async (id) => ({ vm: VM({ vmid: id }), proxmox: { osType: 'l26', agentEnabled: true, disks: [{ slot: 'scsi0', storage: 'ceph', sizeGiB: 40 }] }, netbox: null }) },
+  });
+  const out = json(await tools.handle('vm_get', { vm: 177 }, ctx));
+  assert.equal(out.vm.vmid, 177);
+  assert.equal(out.vm.ip, '192.168.100.80');
+  assert.deepEqual(out.disks, [{ slot: 'scsi0', storage: 'ceph', sizeGiB: 40 }]);
+});
+
+test('vm_get by name: unique ok, ambiguous lists vmids, missing errors', async () => {
+  const list = [VM(), VM({ vmid: 200, name: 'dup' }), VM({ vmid: 201, name: 'dup' })];
+  const { ctx, calls } = makeCtx({
+    api: { vms: async () => list, vm: async (id) => ({ vm: list.find((v) => v.vmid === id), proxmox: {}, netbox: null }) },
+  });
+  assert.equal(json(await tools.handle('vm_get', { vm: 'jibri-1' }, ctx)).vm.vmid, 177);
+  const amb = await tools.handle('vm_get', { vm: 'dup' }, ctx);
+  assert.equal(amb.isError, true);
+  assert.match(text(amb), /200/);
+  assert.match(text(amb), /201/);
+  const none = await tools.handle('vm_get', { vm: 'nada' }, ctx);
+  assert.equal(none.isError, true);
+  assert.match(text(none), /nada/);
+  assert.equal(calls.filter((c) => c.k === 'vm').length, 1);
+});
+
+test('vm_catalog includes sshUser setting, default ubuntu', async () => {
+  const api = {
+    catalogNodes: async () => [{ name: 'pve1', status: 'online' }],
+    catalogStorages: async () => [{ name: 'ceph' }],
+    catalogTemplates: async () => [{ vmid: 9000, name: 'ubuntu' }],
+    catalogDefaults: async () => ({ cores: 2, memory: 4096, diskGiB: 40 }),
+  };
+  const a = json(await tools.handle('vm_catalog', {}, makeCtx({ api }).ctx));
+  assert.equal(a.sshUser, 'ubuntu');
+  assert.deepEqual(a.nodes, [{ name: 'pve1', status: 'online' }]);
+  assert.equal(a.defaults.memory, 4096);
+  const b = json(await tools.handle('vm_catalog', {}, makeCtx({ api, settings: { sshUser: 'debian' } }).ctx));
+  assert.equal(b.sshUser, 'debian');
+});
+
+test('bucket_list returns buckets and owners, never a secret', async () => {
+  const { ctx } = makeCtx({
+    api: {
+      buckets: async () => [{ name: 'b1', owner: 'uplii', objects: 3, usedBytes: 10, quotaBytes: null, tenant: null, createdAt: null }],
+      bucketOwners: async () => [{ uid: 'uplii', displayName: 'Uplii' }],
+    },
+  });
+  const out = json(await tools.handle('bucket_list', {}, ctx));
+  assert.deepEqual(out.buckets, [{ name: 'b1', owner: 'uplii', objects: 3, usedBytes: 10, quotaBytes: null }]);
+  assert.deepEqual(out.owners, [{ uid: 'uplii', displayName: 'Uplii' }]);
+});
+
