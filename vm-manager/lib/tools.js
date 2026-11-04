@@ -9,6 +9,7 @@ const path = require('path');
 const { createCreateFlow } = require('./create-flow');
 
 const LOGIN_HINT = 'Entre no VM Manager pelo comando "vm-manager: entrar" e tente de novo.';
+const resumeHint = (name) => `Sua sessão do VM Manager caiu. Entre pelo comando "vm-manager: entrar" e depois chame vm_wait com name "${name}"; não chame vm_create de novo.`;
 const FORBIDDEN = 'Seu papel no console não permite isso.';
 
 const VM_REF = { type: ['integer', 'string'], description: 'VM id (number) or exact VM name.' };
@@ -203,6 +204,8 @@ function creationResult(st, ctx, warnings = []) {
     return ok({ status: 'pronta', vm, ssh: ip ? `${ctx.setting('sshUser', 'ubuntu')}@${ip}` : null, warnings: all });
   }
   if (st.phase === 'unconfirmed') return fail(st.error);
+  // Um 401 do Nest vira `rejected` no create-flow: é sessão caída, não recusa.
+  if (!ctx.loggedIn()) return fail(resumeHint(st.name));
   return fail(`Falhou: ${st.error}`);
 }
 
@@ -211,10 +214,13 @@ async function settle(flow, name, ctx, warnings) {
   const deadline = ctx.now() + ctx.budgetMs;
   for (;;) {
     const st = flow.state();
-    if (FINAL.has(st.phase)) return creationResult(st, ctx, warnings);
+    if (FINAL.has(st.phase)) {
+      startedAt.delete(name);
+      return creationResult(st, ctx, warnings);
+    }
     if (!ctx.loggedIn()) {
       flow.abandon();
-      return fail(LOGIN_HINT);
+      return fail(resumeHint(name));
     }
     const left = deadline - ctx.now();
     if (left <= 0) {
@@ -225,7 +231,11 @@ async function settle(flow, name, ctx, warnings) {
   }
 }
 
-const newFlow = (ctx) => createCreateFlow({ api: ctx.api, now: ctx.now, schedule: ctx.schedule, pollMs: ctx.pollMs });
+const newFlow = (ctx) =>
+  createCreateFlow({ api: ctx.api, now: ctx.now, schedule: ctx.schedule, pollMs: ctx.pollMs, maxMs: ctx.createMaxMs || 600000 });
+
+// Quando cada criação começou: o prazo de 10 min vale pela criação toda, entre chamadas de vm_wait.
+const startedAt = new Map();
 
 async function vmCreate(args, ctx) {
   const name = String(args.name || '');
@@ -238,6 +248,7 @@ async function vmCreate(args, ctx) {
   if (key) body.sshKeys = key;
   else warnings.push(NO_KEY);
   const flow = newFlow(ctx);
+  startedAt.set(name, ctx.now());
   flow.submit(body);
   return settle(flow, name, ctx, warnings);
 }
@@ -246,7 +257,8 @@ async function vmWait({ name }, ctx) {
   const n = String(name || '');
   if (!n) throw new ToolError('Diga o name usado no vm_create.');
   const flow = newFlow(ctx);
-  flow.follow(n);
+  if (!startedAt.has(n)) startedAt.set(n, ctx.now());
+  flow.follow(n, startedAt.get(n));
   return settle(flow, n, ctx, []);
 }
 
@@ -266,7 +278,11 @@ async function vmStop({ vm }, ctx) {
 
 const TIMEOUT = Symbol('timeout');
 
+// Do prazo da ferramenta, o que fica pro DELETE (parar + destruir no Proxmox).
+const DELETE_RESERVE_MS = 35000;
+
 async function vmDestroy({ vm }, ctx) {
+  const start = ctx.now();
   const v = await resolveVm(ctx.api, vm);
   if (v.isTemplate || (v.type && v.type !== 'qemu')) throw new ToolError('Só VMs podem ser destruídas por aqui.');
   const answer = ctx.pick({
@@ -278,7 +294,9 @@ async function vmDestroy({ vm }, ctx) {
   });
   let cancelTimer = () => {};
   const timer = new Promise((resolve) => {
-    cancelTimer = ctx.schedule(() => resolve(TIMEOUT), ctx.budgetMs);
+    const reserve = Math.min(DELETE_RESERVE_MS, ctx.budgetMs * 0.35);
+    const left = Math.max(0, start + ctx.budgetMs - reserve - ctx.now());
+    cancelTimer = ctx.schedule(() => resolve(TIMEOUT), left);
   });
   const got = await Promise.race([Promise.resolve(answer).catch(() => null), timer]);
   cancelTimer();
@@ -293,7 +311,14 @@ async function vmDestroy({ vm }, ctx) {
     return ok('Tempo esgotado; nada foi destruído.');
   }
   if (got !== 'destroy') return ok('Cancelado pelo usuário; nada foi destruído.');
-  await ctx.api.destroyVm(v.vmid);
+  try {
+    await ctx.api.destroyVm(v.vmid);
+  } catch (e) {
+    if (e && e.kind === 'timeout') {
+      return ok(`Pedido de destruir a vm ${v.vmid} (${v.name}) enviado, mas a API não respondeu a tempo; confira com vm_list se ela sumiu.`);
+    }
+    throw e;
+  }
   return ok({ destroyed: { vmid: v.vmid, name: v.name }, message: `vm ${v.vmid} (${v.name}) destruída e removida do NetBox.` });
 }
 

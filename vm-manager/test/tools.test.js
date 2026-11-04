@@ -15,6 +15,7 @@ const NAMES = [
   'bucket_list', 'bucket_create', 'bucket_credentials',
 ];
 const LOGIN_HINT = 'Entre no VM Manager pelo comando "vm-manager: entrar" e tente de novo.';
+const RESUME_HINT = (n) => `Sua sessão do VM Manager caiu. Entre pelo comando "vm-manager: entrar" e depois chame vm_wait com name "${n}"; não chame vm_create de novo.`;
 
 const VM = (over = {}) => ({
   vmid: 177, type: 'qemu', name: 'jibri-1', node: 'pve1', status: 'running', isTemplate: false,
@@ -266,8 +267,46 @@ test('session expires mid-creation → login hint, single POST', async () => {
   const { ctx, calls } = makeCtx({ loggedIn: () => logged, api: { createVm: async () => expire(), vmCreation: async () => expire() } });
   const r = await tools.handle('vm_create', { name: 'ch-1' }, ctx);
   assert.equal(r.isError, true);
-  assert.equal(text(r), LOGIN_HINT);
+  assert.equal(text(r), RESUME_HINT('ch-1'));
   assert.equal(calls.filter((c) => c.k === 'createVm').length, 1);
+});
+
+test('real nest 401 on the POST, after a tick → resume hint, not Falhou', async () => {
+  let logged = true;
+  const { ctx, calls } = makeCtx({
+    loggedIn: () => logged,
+    api: {
+      createVm: async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        logged = false;
+        throw new ApiError('Sessão inválida', 401, { nest: true });
+      },
+    },
+  });
+  const r = await tools.handle('vm_create', { name: 'ch-1' }, ctx);
+  assert.equal(r.isError, true);
+  assert.equal(text(r), RESUME_HINT('ch-1'));
+  assert.equal(calls.filter((c) => c.k === 'createVm').length, 1);
+});
+
+test('vm_wait for a name with no creation and no VM ends unconfirmed', async () => {
+  const { ctx } = makeCtx({
+    api: { vmCreation: async () => { throw new ApiError('Nenhuma criação recente com esse nome.', 404, { nest: true }); }, vms: async () => [] },
+  });
+  const r = await tools.handle('vm_wait', { name: 'fantasma' }, ctx);
+  assert.equal(r.isError, true);
+  assert.equal(text(r), 'Nenhuma criação em andamento nem VM chamada "fantasma"; confira com vm_list.');
+});
+
+test('vm_wait gives up across calls once the creation is older than maxMs', async () => {
+  let t = 1000;
+  const { ctx } = makeCtx({ now: () => t, budgetMs: 30, createMaxMs: 600000, api: { vmCreation: async () => ({ status: 'running' }) } });
+  ctx.sleep = async (ms) => { t += ms; await new Promise((r) => setTimeout(r, ms)); };
+  assert.equal(json(await tools.handle('vm_wait', { name: 'preso' }, ctx)).status, 'em andamento');
+  t += 600000;
+  const r = await tools.handle('vm_wait', { name: 'preso' }, ctx);
+  assert.equal(r.isError, true);
+  assert.match(text(r), /confira a lista/);
 });
 
 test('created without IP → pronta with ssh null and the warning', async () => {
@@ -487,4 +526,30 @@ test('bucket_create never returns the secret and hints bucket_credentials', asyn
   assert.deepEqual(out.bucket, { name: 'backups-ch', owner: 'uplii' });
   assert.equal(out.next, 'Para usar no servidor, chame bucket_credentials com owner "uplii".');
   assert.deepEqual(calls[0].a[0], { name: 'backups-ch', owner: 'uplii', newOwner: true });
+});
+
+test('destroy: dialog deadline counts from tool entry and leaves room for the DELETE', async () => {
+  let t = 0;
+  const { ctx, calls } = makeCtx({
+    now: () => t,
+    budgetMs: 100000,
+    api: lifecycleApi({ vms: async () => { t += 20000; return LIST; } }),
+    pick: () => new Promise(() => {}),
+  });
+  let scheduled = null;
+  ctx.schedule = (fn, ms) => { scheduled = ms; setTimeout(fn, 1); return () => {}; };
+  const r = await tools.handle('vm_destroy', { vm: 177 }, ctx);
+  assert.equal(text(r), 'Tempo esgotado; nada foi destruído.');
+  assert.equal(scheduled, 100000 - 20000 - 35000);
+  assert.equal(count(calls, 'destroyVm'), 0);
+});
+
+test('destroy: DELETE that times out says the request was sent', async () => {
+  const { ctx } = makeCtx({
+    api: lifecycleApi({ destroyVm: async () => { throw new ApiError('A API não respondeu a tempo.', 0, { kind: 'timeout' }); } }),
+    pick: async () => 'destroy',
+  });
+  const r = await tools.handle('vm_destroy', { vm: 177 }, ctx);
+  assert.equal(r.isError, undefined);
+  assert.equal(text(r), 'Pedido de destruir a vm 177 (jibri-1) enviado, mas a API não respondeu a tempo; confira com vm_list se ela sumiu.');
 });
