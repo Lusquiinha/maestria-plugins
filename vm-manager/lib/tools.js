@@ -248,6 +248,53 @@ async function vmWait({ name }, ctx) {
   return settle(flow, n, ctx, []);
 }
 
+// --- ligar, desligar e destruir ---------------------------------------------------------
+
+async function vmStart({ vm }, ctx) {
+  const v = await resolveVm(ctx.api, vm);
+  await ctx.api.startVm(v.vmid);
+  return ok({ vm: { ...vmSummary(v), status: 'ligando' }, message: `Pedi pra ligar a vm ${v.vmid} (${v.name}).` });
+}
+
+async function vmStop({ vm }, ctx) {
+  const v = await resolveVm(ctx.api, vm);
+  await ctx.api.stopVm(v.vmid);
+  return ok({ vm: { ...vmSummary(v), status: 'desligando' }, message: `Pedi pra desligar a vm ${v.vmid} (${v.name}) pelo ACPI.` });
+}
+
+const TIMEOUT = Symbol('timeout');
+
+async function vmDestroy({ vm }, ctx) {
+  const v = await resolveVm(ctx.api, vm);
+  if (v.isTemplate || (v.type && v.type !== 'qemu')) throw new ToolError('Só VMs podem ser destruídas por aqui.');
+  const answer = ctx.pick({
+    title: `Destruir a vm ${v.vmid} (${v.name})? Isso não tem volta.`,
+    items: [
+      { value: 'destroy', label: 'Destruir' },
+      { value: 'cancel', label: 'Cancelar' },
+    ],
+  });
+  let cancelTimer = () => {};
+  const timer = new Promise((resolve) => {
+    cancelTimer = ctx.schedule(() => resolve(TIMEOUT), ctx.budgetMs);
+  });
+  const got = await Promise.race([Promise.resolve(answer).catch(() => null), timer]);
+  cancelTimer();
+  if (got === TIMEOUT) {
+    // O diálogo segue aberto no Maestria: um "Destruir" tardio não vale.
+    Promise.resolve(answer)
+      .then((late) => {
+        if (late === 'destroy') return ctx.banner(`Tempo esgotado: a vm ${v.vmid} não foi destruída.`);
+        return null;
+      })
+      .catch(() => {});
+    return ok('Tempo esgotado; nada foi destruído.');
+  }
+  if (got !== 'destroy') return ok('Cancelado pelo usuário; nada foi destruído.');
+  await ctx.api.destroyVm(v.vmid);
+  return ok({ destroyed: { vmid: v.vmid, name: v.name }, message: `vm ${v.vmid} (${v.name}) destruída e removida do NetBox.` });
+}
+
 // --- buckets -----------------------------------------------------------------------------------
 
 async function bucketList(_args, { api }) {
@@ -266,9 +313,9 @@ const HANDLERS = {
   vm_catalog: vmCatalog,
   vm_create: vmCreate,
   vm_wait: vmWait,
-  vm_start: notYet,
-  vm_stop: notYet,
-  vm_destroy: notYet,
+  vm_start: vmStart,
+  vm_stop: vmStop,
+  vm_destroy: vmDestroy,
   bucket_list: bucketList,
   bucket_create: notYet,
   bucket_credentials: notYet,

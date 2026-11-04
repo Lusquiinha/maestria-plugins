@@ -293,3 +293,86 @@ test('creation failed while tracking surfaces the reason', async () => {
   assert.equal(r.isError, true);
   assert.equal(text(r), 'Falhou: clone falhou');
 });
+
+// --- ligar, desligar e destruir ------------------------------------------------------
+
+const LIST = [VM(), VM({ vmid: 200, name: 'dup' }), VM({ vmid: 201, name: 'dup' }), VM({ vmid: 400, name: 'ct', type: 'lxc' }), VM({ vmid: 9000, name: 'tpl', isTemplate: true })];
+const lifecycleApi = (over = {}) => ({
+  vms: async () => LIST,
+  startVm: async (id) => ({ vmid: id }),
+  stopVm: async (id) => ({ vmid: id }),
+  destroyVm: async (id) => ({ vmid: id }),
+  ...over,
+});
+const count = (calls, k) => calls.filter((c) => c.k === k).length;
+
+test('start/stop call the api once', async () => {
+  const { ctx, calls } = makeCtx({ api: lifecycleApi() });
+  const a = await tools.handle('vm_start', { vm: 'jibri-1' }, ctx);
+  assert.equal(a.isError, undefined, text(a));
+  assert.match(text(a), /177/);
+  await tools.handle('vm_stop', { vm: 177 }, ctx);
+  assert.equal(count(calls, 'startVm'), 1);
+  assert.equal(count(calls, 'stopVm'), 1);
+  assert.deepEqual(calls.find((c) => c.k === 'stopVm').a, [177]);
+});
+
+test('destroy confirmed deletes', async () => {
+  const picks = [];
+  const { ctx, calls } = makeCtx({ api: lifecycleApi(), pick: async (p) => (picks.push(p), 'destroy') });
+  const r = await tools.handle('vm_destroy', { vm: 'jibri-1' }, ctx);
+  assert.equal(r.isError, undefined, text(r));
+  assert.deepEqual(calls.find((c) => c.k === 'destroyVm').a, [177]);
+  assert.equal(picks[0].title, 'Destruir a vm 177 (jibri-1)? Isso não tem volta.');
+  assert.deepEqual(picks[0].items.map((i) => i.value), ['destroy', 'cancel']);
+});
+
+test('destroy cancelled or closed does not delete', async () => {
+  for (const answer of ['cancel', null]) {
+    const { ctx, calls } = makeCtx({ api: lifecycleApi(), pick: async () => answer });
+    const r = await tools.handle('vm_destroy', { vm: 177 }, ctx);
+    assert.equal(r.isError, undefined);
+    assert.equal(text(r), 'Cancelado pelo usuário; nada foi destruído.');
+    assert.equal(count(calls, 'destroyVm'), 0);
+  }
+});
+
+test('destroy with late answer does not delete and shows banner', async () => {
+  const { ctx, calls, banners } = makeCtx({
+    budgetMs: 30,
+    api: lifecycleApi(),
+    pick: () => new Promise((r) => setTimeout(() => r('destroy'), 80)),
+  });
+  const r = await tools.handle('vm_destroy', { vm: 177 }, ctx);
+  assert.equal(text(r), 'Tempo esgotado; nada foi destruído.');
+  await new Promise((r2) => setTimeout(r2, 150));
+  assert.equal(count(calls, 'destroyVm'), 0);
+  assert.deepEqual(banners, ['Tempo esgotado: a vm 177 não foi destruída.']);
+});
+
+test('destroy refuses lxc and templates without asking', async () => {
+  let asked = 0;
+  const { ctx, calls } = makeCtx({ api: lifecycleApi(), pick: async () => (asked++, 'destroy') });
+  for (const vm of ['ct', 9000]) {
+    const r = await tools.handle('vm_destroy', { vm }, ctx);
+    assert.equal(r.isError, true, String(vm));
+    assert.equal(text(r), 'Só VMs podem ser destruídas por aqui.');
+  }
+  assert.equal(asked, 0);
+  assert.equal(count(calls, 'destroyVm'), 0);
+});
+
+test('destroy ambiguous name does not open the dialog', async () => {
+  let asked = 0;
+  const { ctx, calls } = makeCtx({ api: lifecycleApi(), pick: async () => (asked++, 'destroy') });
+  const r = await tools.handle('vm_destroy', { vm: 'dup' }, ctx);
+  assert.equal(r.isError, true);
+  assert.match(text(r), /200, 201/);
+  assert.equal(asked, 0);
+  assert.equal(count(calls, 'destroyVm'), 0);
+});
+
+test('destroy schema has no way to skip the confirmation', () => {
+  const s = tools.SCHEMAS.find((x) => x.name === 'vm_destroy');
+  assert.deepEqual(Object.keys(s.inputSchema.properties), ['vm']);
+});
