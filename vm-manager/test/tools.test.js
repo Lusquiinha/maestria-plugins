@@ -189,3 +189,107 @@ test('bucket_list returns buckets and owners, never a secret', async () => {
   assert.deepEqual(out.owners, [{ uid: 'uplii', displayName: 'Uplii' }]);
 });
 
+
+// --- criar e esperar ---------------------------------------------------------------
+
+const CREATED = (over = {}) => ({ vm: VM({ vmid: 300, name: 'ch-1', ipConfigured: '10.0.0.5/24', ...over }), netbox: null, backupSlot: null, ha: true, warnings: [] });
+
+test('vm_create posts once and returns ssh user@ip', async () => {
+  const { ctx, calls } = makeCtx({ api: { createVm: async () => CREATED() } });
+  const r = await tools.handle('vm_create', { name: 'ch-1', cores: 4, memoryMiB: 8192, diskGiB: 100 }, ctx);
+  assert.equal(r.isError, undefined, text(r));
+  const out = json(r);
+  assert.equal(out.status, 'pronta');
+  assert.equal(out.vm.vmid, 300);
+  assert.equal(out.ssh, 'ubuntu@10.0.0.5');
+  const posts = calls.filter((c) => c.k === 'createVm');
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0].a[0], { name: 'ch-1', cores: 4, memory: 8192, diskGiB: 100, sshKeys: 'ssh-ed25519 AAAAPUB arthur@pc' });
+});
+
+test('vm_create uses the sshUser setting', async () => {
+  const { ctx } = makeCtx({ settings: { sshUser: 'debian' }, api: { createVm: async () => CREATED() } });
+  assert.equal(json(await tools.handle('vm_create', { name: 'ch-1' }, ctx)).ssh, 'debian@10.0.0.5');
+});
+
+test('vm_create without a public key still creates and warns', async () => {
+  const { ctx, calls } = makeCtx({ readPubKey: async () => null, api: { createVm: async () => CREATED() } });
+  const out = json(await tools.handle('vm_create', { name: 'ch-1' }, ctx));
+  assert.equal(out.status, 'pronta');
+  assert.equal(calls[0].a[0].sshKeys, undefined);
+  assert.ok(out.warnings.some((w) => /chave SSH/.test(w)), out.warnings.join());
+});
+
+test('vm_create rejects an invalid hostname before posting', async () => {
+  const { ctx, calls } = makeCtx({ api: { createVm: async () => CREATED() } });
+  const r = await tools.handle('vm_create', { name: 'Ch_1' }, ctx);
+  assert.equal(r.isError, true);
+  assert.equal(calls.length, 0);
+});
+
+test('vm_create past the budget returns em andamento and never re-posts', async () => {
+  const { ctx, calls } = makeCtx({ budgetMs: 50, api: { createVm: () => new Promise(() => {}) } });
+  const r = await tools.handle('vm_create', { name: 'ch-1' }, ctx);
+  assert.equal(r.isError, undefined);
+  const out = json(r);
+  assert.equal(out.status, 'em andamento');
+  assert.equal(out.name, 'ch-1');
+  assert.match(out.next, /vm_wait/);
+  assert.equal(calls.filter((c) => c.k === 'createVm').length, 1);
+});
+
+test('vm_wait follows and returns pronta; never posts', async () => {
+  let n = 0;
+  const { ctx, calls } = makeCtx({
+    api: {
+      createVm: async () => CREATED(),
+      vmCreation: async () => (++n < 3 ? { status: 'running' } : { status: 'succeeded', result: CREATED() }),
+    },
+  });
+  const out = json(await tools.handle('vm_wait', { name: 'ch-1' }, ctx));
+  assert.equal(out.status, 'pronta');
+  assert.equal(out.ssh, 'ubuntu@10.0.0.5');
+  assert.equal(calls.filter((c) => c.k === 'createVm').length, 0);
+});
+
+test('vm_wait past the budget says em andamento again', async () => {
+  const { ctx } = makeCtx({ budgetMs: 40, api: { vmCreation: async () => ({ status: 'running' }) } });
+  assert.equal(json(await tools.handle('vm_wait', { name: 'ch-1' }, ctx)).status, 'em andamento');
+});
+
+test('session expires mid-creation → login hint, single POST', async () => {
+  let logged = true;
+  const expire = () => {
+    logged = false;
+    throw new ApiError('Unauthorized', 401);
+  };
+  const { ctx, calls } = makeCtx({ loggedIn: () => logged, api: { createVm: async () => expire(), vmCreation: async () => expire() } });
+  const r = await tools.handle('vm_create', { name: 'ch-1' }, ctx);
+  assert.equal(r.isError, true);
+  assert.equal(text(r), LOGIN_HINT);
+  assert.equal(calls.filter((c) => c.k === 'createVm').length, 1);
+});
+
+test('created without IP → pronta with ssh null and the warning', async () => {
+  const { ctx } = makeCtx({ api: { createVm: async () => CREATED({ ipConfigured: null, ipDetected: null, status: 'stopped' }) } });
+  const out = json(await tools.handle('vm_create', { name: 'ch-1', startAfterCreate: false }, ctx));
+  assert.equal(out.status, 'pronta');
+  assert.equal(out.ssh, null);
+  assert.ok(out.warnings.includes('A VM ainda não tem IP; use vm_get em instantes.'));
+});
+
+test('rejected (400) surfaces the backend message as error', async () => {
+  const { ctx } = makeCtx({ api: { createVm: async () => { throw new ApiError('Já existe uma VM chamada "ch-1".', 400, { nest: true }); } } });
+  const r = await tools.handle('vm_create', { name: 'ch-1' }, ctx);
+  assert.equal(r.isError, true);
+  assert.match(text(r), /^Falhou: Já existe uma VM chamada/);
+});
+
+test('creation failed while tracking surfaces the reason', async () => {
+  const { ctx } = makeCtx({
+    api: { createVm: async () => { throw new ApiError('Bad Gateway', 502); }, vmCreation: async () => ({ status: 'failed', error: 'clone falhou' }) },
+  });
+  const r = await tools.handle('vm_create', { name: 'ch-1' }, ctx);
+  assert.equal(r.isError, true);
+  assert.equal(text(r), 'Falhou: clone falhou');
+});

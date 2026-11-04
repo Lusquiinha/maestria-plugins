@@ -4,6 +4,8 @@
 // `tool.call` a handle(); `ctx` vem de toolCtx() lá (os testes passam um falso):
 // { api, loggedIn, setting, pick, banner, now, sleep, schedule, budgetMs, pollMs, home, readPubKey, log }
 
+const { createCreateFlow } = require('./create-flow');
+
 const LOGIN_HINT = 'Entre no VM Manager pelo comando "vm-manager: entrar" e tente de novo.';
 const FORBIDDEN = 'Seu papel no console não permite isso.';
 
@@ -182,6 +184,70 @@ async function vmCatalog(_args, { api, setting }) {
   return ok({ nodes, storages, templates, defaults, sshUser: setting('sshUser', 'ubuntu') });
 }
 
+// --- criar e esperar ----------------------------------------------------------------------
+
+const HOSTNAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const NO_IP = 'A VM ainda não tem IP; use vm_get em instantes.';
+const NO_KEY = 'Nenhuma chave SSH pública local (~/.ssh/id_ed25519.pub): a VM saiu só com as chaves padrão do ambiente.';
+const FINAL = new Set(['succeeded', 'rejected', 'failed', 'unconfirmed']);
+
+function creationResult(st, ctx, warnings = []) {
+  if (st.phase === 'succeeded') {
+    const res = st.result || {};
+    const vm = res.vm ? vmSummary(res.vm) : null;
+    const ip = vm && vm.ip;
+    const all = [...warnings, ...(res.warnings || [])];
+    if (!ip) all.push(NO_IP);
+    return ok({ status: 'pronta', vm, ssh: ip ? `${ctx.setting('sshUser', 'ubuntu')}@${ip}` : null, warnings: all });
+  }
+  if (st.phase === 'unconfirmed') return fail(st.error);
+  return fail(`Falhou: ${st.error}`);
+}
+
+/** Espera o fluxo chegar a um fim, até `ctx.budgetMs`. Ao estourar, larga só o acompanhamento local. */
+async function settle(flow, name, ctx, warnings) {
+  const deadline = ctx.now() + ctx.budgetMs;
+  for (;;) {
+    const st = flow.state();
+    if (FINAL.has(st.phase)) return creationResult(st, ctx, warnings);
+    if (!ctx.loggedIn()) {
+      flow.abandon();
+      return fail(LOGIN_HINT);
+    }
+    const left = deadline - ctx.now();
+    if (left <= 0) {
+      flow.abandon();
+      return ok({ status: 'em andamento', name, next: `Ainda criando. Chame vm_wait com name "${name}".`, warnings });
+    }
+    await ctx.sleep(Math.min(ctx.pollMs, left));
+  }
+}
+
+const newFlow = (ctx) => createCreateFlow({ api: ctx.api, now: ctx.now, schedule: ctx.schedule, pollMs: ctx.pollMs });
+
+async function vmCreate(args, ctx) {
+  const name = String(args.name || '');
+  if (!HOSTNAME.test(name)) throw new ToolError('name deve ser um hostname válido (minúsculas, dígitos e hífen; 1–63 chars).');
+  const body = { name };
+  const map = { cores: 'cores', memoryMiB: 'memory', diskGiB: 'diskGiB', template: 'template', node: 'node', storage: 'storage', ipCidr: 'ipCidr', backup: 'backup', ha: 'ha', startAfterCreate: 'startAfterCreate' };
+  for (const [k, to] of Object.entries(map)) if (args[k] !== undefined) body[to] = args[k];
+  const warnings = [];
+  const key = await ctx.readPubKey();
+  if (key) body.sshKeys = key;
+  else warnings.push(NO_KEY);
+  const flow = newFlow(ctx);
+  flow.submit(body);
+  return settle(flow, name, ctx, warnings);
+}
+
+async function vmWait({ name }, ctx) {
+  const n = String(name || '');
+  if (!n) throw new ToolError('Diga o name usado no vm_create.');
+  const flow = newFlow(ctx);
+  flow.follow(n);
+  return settle(flow, n, ctx, []);
+}
+
 // --- buckets -----------------------------------------------------------------------------------
 
 async function bucketList(_args, { api }) {
@@ -198,8 +264,8 @@ const HANDLERS = {
   vm_list: vmList,
   vm_get: vmGet,
   vm_catalog: vmCatalog,
-  vm_create: notYet,
-  vm_wait: notYet,
+  vm_create: vmCreate,
+  vm_wait: vmWait,
   vm_start: notYet,
   vm_stop: notYet,
   vm_destroy: notYet,
