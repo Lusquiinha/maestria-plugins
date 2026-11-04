@@ -2951,3 +2951,39 @@ test('sair com o login esperando o navegador fecha o retorno: o login não termi
   }
   assert.deepEqual(p.bad, []);
 });
+
+test('tool.call vm_manager_list over stdio without session returns the login hint', { timeout: 15000 }, async () => {
+  const api = await fakeApi({});
+  const dataDir = tmpDir();
+  const p = startPlugin({ dataDir, url: api.url });
+  try {
+    await p.init();
+    const r = await p.call('tool.call', { tool: 'vm_manager_list', args: {}, tabId: 't1', cwd: dataDir });
+    assert.equal(r.isError, true);
+    assert.equal(r.content[0].text, 'Entre no VM Manager pelo comando "vm-manager: entrar" e tente de novo.');
+    assert.equal(api.seen.length, 0);
+  } finally {
+    await p.stop();
+    closeApi(api);
+  }
+});
+
+test('tool.call vm_manager_list with a stored session lists the VMs without leaking the token', { timeout: 15000 }, async () => {
+  const user = { id: 'u1', email: 'arthur@marrow.com.br', name: 'Arthur Fonseca', role: 'admin' };
+  const api = await fakeApi({ 'tok-admin-123': user });
+  const dataDir = tmpDir();
+  seed(dataDir, api.url, 'tok-admin-123', user);
+  const p = startPlugin({ dataDir, url: api.url });
+  try {
+    await p.init();
+    const r = await p.call('tool.call', { tool: 'vm_manager_list', args: {}, tabId: 't1', cwd: dataDir });
+    assert.equal(r.isError, undefined);
+    const out = JSON.parse(r.content[0].text);
+    assert.deepEqual(out.vms.map((v) => v.name), ['jibri-1', 'db']);
+    assert.doesNotMatch(r.content[0].text, /tok-admin-123/);
+    assert.equal(api.seen.find((s) => s.path === '/api/vms').auth, 'Bearer tok-admin-123');
+  } finally {
+    await p.stop();
+    closeApi(api);
+  }
+});

@@ -47,13 +47,14 @@ function createCreateFlow({ api, now, schedule, pollMs = 5000, maxMs = 600000 })
     }
   }
 
-  function track() {
+  // `known`: a criação já foi vista (follow): 404 sem registro → confere na lista.
+  function track(known = false, followed = false) {
     const g = gen;
     const put = (patch) => {
       if (g === gen) set(patch);
     };
     const name = st.name;
-    let sawRunning = false;
+    let sawRunning = known;
 
     const finishFound = (vm) =>
       put({
@@ -89,6 +90,11 @@ function createCreateFlow({ api, now, schedule, pollMs = 5000, maxMs = 600000 })
         // registro perdido (API reiniciou): confere na lista
         const vm = await findVm(name);
         if (vm) return finishFound(vm);
+        if (followed) {
+          // vm_wait sem registro nem VM: não há o que esperar.
+          put({ phase: 'unconfirmed', error: `Nenhuma criação em andamento nem VM chamada "${name}"; confira com vm_manager_list.` });
+          return;
+        }
       }
       if (g !== gen) return;
       if (now() - st.startedAt >= maxMs) {
@@ -124,6 +130,14 @@ function createCreateFlow({ api, now, schedule, pollMs = 5000, maxMs = 600000 })
     })();
   }
 
+  // Acompanha uma criação já em curso pelo nome, sem POST (o vm_wait das ferramentas).
+  // `startedAt`: quando a criação começou (o prazo `maxMs` vale pra ela toda, não por chamada).
+  function follow(name, startedAt = now()) {
+    if (st.phase !== 'idle') return;
+    set({ phase: 'tracking', name: String(name || ''), result: null, error: '', startedAt });
+    track(true, true);
+  }
+
   function reset() {
     if (!FINAL.has(st.phase)) return false;
     set({ phase: 'idle', name: '', result: null, error: '', startedAt: 0 });
@@ -142,6 +156,7 @@ function createCreateFlow({ api, now, schedule, pollMs = 5000, maxMs = 600000 })
   return {
     state: () => ({ ...st }),
     submit,
+    follow,
     reset,
     abandon,
     onChange(fn) {

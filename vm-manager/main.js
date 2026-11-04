@@ -36,6 +36,7 @@ const cf = require('./lib/create-form');
 const { createCreateFlow } = require('./lib/create-flow');
 const rt = require('./lib/routes');
 const adm = require('./lib/admin');
+const tools = require('./lib/tools');
 
 const MAIN = 'vmm';
 const TITLE = 'VM Manager';
@@ -2078,6 +2079,50 @@ function forgetAdmin() {
 }
 
 // --- o protocolo -----------------------------------------------------------------------
+
+// --- as ferramentas MCP (lib/tools.js) -------------------------------------------------
+
+const TOOL_BUDGET_MS = envMs('VMM_TOOL_BUDGET_MS', 100000);
+
+/** Chave pública SSH do usuário local (nunca a privada); null se não houver. */
+async function readPubKey() {
+  const ssh = path.join(os.homedir(), '.ssh');
+  try {
+    return fs.readFileSync(path.join(ssh, 'id_ed25519.pub'), 'utf8').trim() || null;
+  } catch {
+    // sem .pub: deriva da privada
+  }
+  if (!fs.existsSync(path.join(ssh, 'id_ed25519'))) return null;
+  return new Promise((resolve) => {
+    require('child_process').execFile('ssh-keygen', ['-y', '-f', path.join(ssh, 'id_ed25519')], { timeout: 5000 }, (err, out) =>
+      resolve(err ? null : String(out).trim() || null),
+    );
+  });
+}
+
+function toolCtx() {
+  const s = state.session;
+  return {
+    api: s.api,
+    loggedIn: () => s.isLoggedIn(),
+    setting,
+    pick: (params) => mx.request('window.pick', params),
+    banner: (text) => mx.request('window.showBanner', { text }).catch(() => {}),
+    now: Date.now,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    schedule: (fn, ms) => {
+      const t = setTimeout(fn, ms);
+      return () => clearTimeout(t);
+    },
+    budgetMs: TOOL_BUDGET_MS,
+    pollMs: CREATE_POLL_MS,
+    home: os.homedir(),
+    readPubKey,
+    log: (...a) => mx.log(...a),
+  };
+}
+
+mx.onRequest('tool.call', ({ tool, args }) => tools.handle(tool, args, toolCtx()));
 
 mx.onRequest('initialize', (params) => {
   state.caps = { rfw: Number(params.rfw) >= 1, modal: Number(params.modal) >= 1, textInput: Number(params.textInput) >= 1 };
