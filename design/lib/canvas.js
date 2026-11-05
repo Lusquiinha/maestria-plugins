@@ -137,6 +137,35 @@ function readDarkMode(repo) {
   return fallback;
 }
 
+const THEME = 'styles/theme.css';
+// Starter tokens of a plain css canvas; Claude adjusts them to the project.
+const STARTER_THEME = `:root {
+  --font: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --bg: #ffffff;
+  --surface: #f6f7f9;
+  --text: #111827;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --accent: #4f46e5;
+  --accent-text: #ffffff;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --radius: 8px;
+}
+
+.dark {
+  --bg: #0b0d12;
+  --surface: #151922;
+  --text: #f3f4f6;
+  --muted: #9ca3af;
+  --border: #262b36;
+  --accent: #818cf8;
+  --accent-text: #0b0d12;
+  --danger: #f87171;
+  --success: #4ade80;
+}
+`;
+
 function init(dir, { repo }) {
   const file = path.join(dir, 'canvas.json');
   const created = !fs.existsSync(file);
@@ -146,8 +175,17 @@ function init(dir, { repo }) {
   fs.mkdirSync(path.join(dir, 'components'), { recursive: true });
   if (created) write(dir, { v: 1, title: path.basename(dir), boards: {}, order: [] });
   if (needDesign) {
+    const plain = !repo || !project.usesTailwind(repo);
+    if (plain) {
+      const theme = path.join(dir, THEME);
+      if (!fs.existsSync(theme)) {
+        fs.mkdirSync(path.dirname(theme), { recursive: true });
+        fs.writeFileSync(theme, STARTER_THEME);
+      }
+    }
     writeAtomic(designFile, `${JSON.stringify({
-      repo, darkMode: readDarkMode(repo), css: project.cssVarFiles(repo), brand: null, head: '',
+      repo, styling: plain ? 'css' : 'tailwind', darkMode: readDarkMode(repo),
+      css: plain ? [] : project.cssVarFiles(repo), brand: plain ? THEME : null, head: '',
     }, null, 2)}\n`);
   }
   return { created };

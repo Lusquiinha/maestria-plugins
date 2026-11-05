@@ -9,6 +9,7 @@ const chromeMod = require('./chrome');
 const components = require('./components');
 const nodes = require('./nodes');
 const page = require('./page');
+const project = require('./project');
 const renderMod = require('./render');
 
 const DEBOUNCE_MS = 40;
@@ -482,6 +483,11 @@ async function open(canvasDir, { dataDir, log } = {}) {
   // Tailwind v3 only watches content dirs that exist when it starts
   fs.mkdirSync(path.join(eng.dataDir, 'expanded'), { recursive: true });
   eng.loadDesign();
+  if (project.styling(eng.design) === 'css') {
+    // plain css: no Tailwind to start or download, the page links a fixed base
+    eng.outCss = path.join(eng.dataDir, 'base.css');
+    writeAtomic(eng.outCss, page.BASE_CSS);
+  }
   eng.loadCanvas(false);
   // pages first, so Tailwind's first build already knows every class
   const names = eng.renderable();
@@ -494,7 +500,8 @@ async function open(canvasDir, { dataDir, log } = {}) {
   let twP;
   try {
     chromeP = chromeMod.launch(eng.chromeOpts);
-    twP = page.startTailwind({ canvasDir: dir, design: eng.design, dataDir: eng.dataDir, outCss: eng.outCss, log: (m) => eng.log(`tailwind: ${m}`) });
+    twP = project.styling(eng.design) === 'css' ? null
+      : page.startTailwind({ canvasDir: dir, design: eng.design, dataDir: eng.dataDir, outCss: eng.outCss, log: (m) => eng.log(`tailwind: ${m}`) });
     [eng.chrome, eng.tw] = await Promise.all([chromeP, twP]);
     eng._track(eng.chrome);
   } catch (e) {

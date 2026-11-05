@@ -43,6 +43,29 @@ test('without tailwind in node_modules detect falls back to the bundled v4', () 
   });
 });
 
+test('usesTailwind: installed, declared, configured or imported counts; nothing else does', () => {
+  const mk = (files) => {
+    const d = fs.mkdtempSync(path.join(tmp, 'uses-'));
+    for (const [f, body] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(d, f)), { recursive: true });
+      fs.writeFileSync(path.join(d, f), body);
+    }
+    return d;
+  };
+  assert.strictEqual(project.usesTailwind(mk({})), false);
+  assert.strictEqual(project.usesTailwind(mk({ 'package.json': '{"dependencies":{"react":"18"}}', 'src/index.css': 'body{}' })), false);
+  assert.strictEqual(project.usesTailwind(mk({ 'node_modules/.bin/tailwindcss': '' })), true);
+  assert.strictEqual(project.usesTailwind(mk({ 'package.json': '{"devDependencies":{"tailwindcss":"^4"}}' })), true);
+  assert.strictEqual(project.usesTailwind(mk({ 'tailwind.config.js': 'module.exports={}' })), true);
+  assert.strictEqual(project.usesTailwind(mk({ 'src/app.css': '@import "tailwindcss";' })), true);
+});
+
+test('styling: explicit in design.json, older canvases without it stay on tailwind', () => {
+  assert.strictEqual(project.styling({ styling: 'css' }), 'css');
+  assert.strictEqual(project.styling({ styling: 'tailwind' }), 'tailwind');
+  assert.strictEqual(project.styling({}), 'tailwind');
+});
+
 test('the bundled tailwind gets a class-based dark variant and the plain tailwindcss import', async () => {
   const root = fs.mkdtempSync(path.join(tmp, 'cache-'));
   const a = { name: 'fake', sha256: 'x', url: 'http://unused' };

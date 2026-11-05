@@ -16,6 +16,16 @@ function buildPage({ outCss, brandCss = '', head = '', body, version }) {
     + `${brand}${head || ''}</head><body style="margin:0">${body}</body></html>`;
 }
 
+// What a plain css canvas links instead of Tailwind's output: a light reset,
+// the theme tokens (design.brand) style the rest.
+const BASE_CSS = `*, ::before, ::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { font-family: var(--font, system-ui, sans-serif); line-height: 1.5; color: var(--text, #111);
+  background: var(--bg, #fff); -webkit-font-smoothing: antialiased; }
+img, svg, video { display: block; max-width: 100%; }
+button, input, select, textarea { font: inherit; color: inherit; }
+`;
+
 async function startTailwind({ canvasDir, design, dataDir, outCss, log }) {
   if (!design.repo || typeof design.repo !== 'string') throw new Error('design.json não diz o projeto: preencha "repo"');
   const repoDir = path.resolve(canvasDir, design.repo);
@@ -60,4 +70,4 @@ function checkMarkup(html) {
   return null;
 }
 
-module.exports = { buildPage, startTailwind, checkMarkup };
+module.exports = { buildPage, startTailwind, checkMarkup, BASE_CSS };
