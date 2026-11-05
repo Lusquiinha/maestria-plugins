@@ -74,6 +74,22 @@ function detect(repoDir) {
   };
 }
 
+// Does the project use Tailwind at all (installed, declared, configured or
+// imported by its css)? A new canvas of one that does not is plain css.
+function usesTailwind(repoDir) {
+  if (fs.existsSync(path.join(repoDir, 'node_modules', '.bin', 'tailwindcss'))) return true;
+  const pkg = readJson(path.join(repoDir, 'package.json')) || {};
+  if ((pkg.devDependencies && pkg.devDependencies.tailwindcss) || (pkg.dependencies && pkg.dependencies.tailwindcss)) return true;
+  if (CONFIG_NAMES.some((n) => isFile(path.join(repoDir, n)))) return true;
+  return Boolean(findV4Entry(repoDir));
+}
+
+// How a canvas styles its boards: design.json says; canvases made before the
+// field existed were Tailwind.
+function styling(design) {
+  return design && design.styling === 'css' ? 'css' : 'tailwind';
+}
+
 function portableEntry(text, entryDir) {
   return text.split('\n').filter((line) => !/^\s*@plugin\s/.test(line)).map((line) => {
     const m = /^(\s*@import\s+)(["'])([^"']+)\2(.*)$/.exec(line);
@@ -265,4 +281,4 @@ function cssVarFiles(repoDir) {
 }
 
 module.exports = {
-  portableEntry, findV4Entry, detect, colorFamilies, cssVarFiles };
+  portableEntry, findV4Entry, detect, usesTailwind, styling, colorFamilies, cssVarFiles };

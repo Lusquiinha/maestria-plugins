@@ -41,7 +41,7 @@ const SCHEMAS = [
       properties: {
         canvas: CANVAS,
         name: { type: 'string', description: 'New canvas name when no folder is given: lowercase letters, digits, - and _.' },
-        repo: { type: 'string', description: "Repository this design is for (absolute, ~/ or relative to the session cwd): its Tailwind theme and colors style the boards. Omit to use the session's repo; pass it when the session folder holds several repos. A repo without Tailwind gets the default palette." },
+        repo: { type: 'string', description: "Repository this design is for (absolute, ~/ or relative to the session cwd): its Tailwind theme and colors style the boards. Omit to use the session's repo; pass it when the session folder holds several repos. A repo without Tailwind gets a plain css canvas (no Tailwind)." },
       },
       additionalProperties: false,
     },
@@ -202,22 +202,31 @@ async function open(args, ctx) {
   let canvas;
   try { canvas = canvasMod.read(dir); } catch (e) { return fail(errText(e)); }
   const repoDir = path.resolve(dir, designRepo);
-  const detected = project.detect(repoDir).tailwind;
-  const own = !detected.bundled || Boolean(detected.input);
-  const families = own ? project.colorFamilies(repoDir) : [];
+  let design = {};
+  try { design = JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8')); } catch { /* tailwind */ }
   const lines = [
     `canvas: ${dir}`,
     `repo: ${designRepo}`,
     `boards (${canvas.order.length}):`,
     ...(canvas.order.length ? boardList(canvas, dir) : ['- nenhuma ainda: crie com design_board']),
-    own
-      ? `cores do tailwind do projeto: ${families.length ? families.join(', ') : '(não consegui listar; leia o tailwind.config ou o @theme do repo)'}`
-      : 'cores do tailwind do projeto: o projeto não tem tailwind; use a paleta padrão do Tailwind v4',
+    styleLine(repoDir, design, dir),
   ];
   if (V && V.failed) lines.push(`aviso: o motor não abriu (${V.ui && V.ui.message}); design_render vai falhar até corrigir`);
   for (const w of canvas.warnings || []) lines.push(`aviso: ${w}`);
   lines.push('', fs.readFileSync(GUIDE, 'utf8'));
   return text(lines.join('\n'));
+}
+
+function styleLine(repoDir, design, dir) {
+  if (project.styling(design) === 'css') {
+    const theme = design.brand ? path.resolve(dir, design.brand) : '(sem brand no design.json)';
+    return `estilo: CSS puro, sem Tailwind; tokens em ${theme} (veja "Plain css canvases" no guia)`;
+  }
+  const detected = project.detect(repoDir).tailwind;
+  const own = !detected.bundled || Boolean(detected.input);
+  if (!own) return 'cores do tailwind do projeto: o projeto não tem tailwind; use a paleta padrão do Tailwind v4';
+  const families = project.colorFamilies(repoDir);
+  return `cores do tailwind do projeto: ${families.length ? families.join(', ') : '(não consegui listar; leia o tailwind.config ou o @theme do repo)'}`;
 }
 
 async function board(args, ctx) {

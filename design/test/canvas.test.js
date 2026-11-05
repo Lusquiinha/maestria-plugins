@@ -88,7 +88,7 @@ test('init creates the folder and design.json', () => {
   assert.ok(fs.statSync(path.join(dir, 'components')).isDirectory());
   assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'canvas.json'), 'utf8')).title, 'my-canvas');
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8')),
-    { repo, darkMode: { class: 'dark' }, css: [], brand: null, head: '' });
+    { repo, styling: 'tailwind', darkMode: { class: 'dark' }, css: [], brand: null, head: '' });
   assert.deepStrictEqual(canvas.init(dir, { repo }), { created: false });
 });
 
@@ -113,6 +113,27 @@ test('init makes a canvas for a repo without tailwind, dark mode by the dark cla
   const design = JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8'));
   assert.deepStrictEqual(design.darkMode, { class: 'dark' });
   assert.ok(fs.existsSync(path.join(dir, 'boards')));
+});
+
+test('a repo without tailwind gets a plain css canvas with a starter theme', () => {
+  const repo = tmp();
+  const dir = path.join(tmp(), 'plain');
+  canvas.init(dir, { repo });
+  const design = JSON.parse(fs.readFileSync(path.join(dir, 'design.json'), 'utf8'));
+  assert.strictEqual(design.styling, 'css');
+  assert.strictEqual(design.brand, 'styles/theme.css');
+  const theme = fs.readFileSync(path.join(dir, 'styles', 'theme.css'), 'utf8');
+  assert.match(theme, /:root\s*\{[^}]*--bg:/);
+  assert.match(theme, /\.dark\s*\{[^}]*--bg:/);
+});
+
+test('init never overwrites a theme.css the canvas already has', () => {
+  const repo = tmp();
+  const dir = path.join(tmp(), 'plain');
+  fs.mkdirSync(path.join(dir, 'styles'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'styles', 'theme.css'), ':root { --mine: 1; }');
+  canvas.init(dir, { repo });
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'styles', 'theme.css'), 'utf8'), ':root { --mine: 1; }');
 });
 
 test('init lists the stylesheets that define the css variables the config reads', () => {

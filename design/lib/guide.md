@@ -1,10 +1,13 @@
 # Design canvas guide (read once per session)
 
-You draw screens and components as HTML boards. The plugin renders each board with the
-project's own Tailwind, in light and dark, and shows it on a canvas beside this session.
+You draw screens and components as HTML boards. The plugin renders each board in light and dark
+and shows it on a canvas beside this session. Boards are styled one of two ways, set by
+`styling` in design.json and printed by design_open:
+- Tailwind (`cores do tailwind do projeto: …`): the project's own Tailwind classes.
+- Plain css (`estilo: CSS puro …`): the project has no Tailwind; see "Plain css canvases" below.
 
 ## Folder layout (the canvas folder returned by design_open)
-- `design.json`: project repo, dark-mode switch and the css a board needs besides Tailwind
+- `design.json`: project repo, styling, dark-mode switch and extra css
   (see "design.json" below). Adjust it only if renders look wrong.
 - `canvas.json`: board index (x, y, w, h, order). Create boards with `design_board`, never by hand.
 - `boards/<name>.html`: one board per file. Plain HTML, no scripts, no `<html>`/`<body>` wrapper.
@@ -34,19 +37,22 @@ pans (left-drag never pans); click selects a component, double-click goes into i
   select the element again; do not guess.
 
 ## Rules for boards
-- Use only the project's Tailwind classes and its color families (design_open prints them above
-  this guide, in the line `cores do tailwind do projeto`). When that line says the project has no
-  Tailwind, use the default Tailwind v4 palette.
+- Tailwind canvases: use only the project's Tailwind classes and its color families (design_open
+  prints them above this guide, in the line `cores do tailwind do projeto`). When that line says the
+  project has no Tailwind, use the default Tailwind v4 palette.
   No arbitrary hex colors, no inline styles for color, no invented class names.
-- Dark mode: use the project's `dark:` variants or its theme variables; the plugin toggles the
-  switch declared in design.json. Check that text stays readable in both.
+- Dark mode: use the project's `dark:` variants or its theme variables (on plain css canvases, the
+  theme's `.dark` tokens); the plugin toggles the switch declared in design.json. Check that text
+  stays readable in both.
 - Widths: desktop 1440, mobile 390 (tablet 768). Omit `h` to let the height follow the content.
 - Copy inside boards is PT-BR. Never put notes, labels or explanations inside a board; explain in
   the chat instead.
 - Use realistic content (names, amounts, dates), not lorem ipsum.
 
 ## design.json
-- `repo`: the project whose Tailwind renders the boards.
+- `repo`: the project the boards are for (its Tailwind renders them on Tailwind canvases).
+- `styling`: `"tailwind"` or `"css"`. design_open picks it when it creates the canvas (css when the
+  repo has no Tailwind); a design.json without it is Tailwind. Changing it needs design_open again.
 - `darkMode`: how dark is switched on, `{ "class": "dark" }` or `{ "attr": "data-theme", "value": "dark" }`.
 - `css`: stylesheets of the repo (paths relative to it) compiled before Tailwind. Projects whose
   colors are CSS variables (`rgb(var(--slate-3) / <alpha-value>)`) need the file that defines those
@@ -59,6 +65,19 @@ pans (left-drag never pans); click selects a component, double-click goes into i
   `"brand": "brands/ninepay.css"` with `:root:root { --blue-9: 73 13 191; … }` and
   `.dark.dark { … }` overrides. `null` when the project's colors are enough.
 - `head`: raw HTML added to every board's `<head>` (a font `<link>`, a `<style>`). Usually `""`.
+
+## Plain css canvases
+When design_open prints `estilo: CSS puro`, nothing runs Tailwind: Tailwind classes do nothing.
+- Colors, fonts, radius live as CSS variables in the canvas theme, `styles/theme.css` (the `brand`
+  of design.json): `:root { --bg: …; --text: …; --accent: … }` and the dark values under `.dark { … }`.
+  It starts with neutral tokens: adjust them to the project's look (its css, logo, existing screens)
+  before the first board, and add tokens there instead of repeating values. Saving it re-renders
+  every board.
+- Shared classes (buttons, inputs, cards, layout) go in a component or in the theme file; a board
+  can also carry its own `<style>` for what only it uses. Always `var(--token)` for colors, never hex
+  in a board.
+- Short, readable class names (`.card`, `.btn-primary`, `.sidebar`); no Tailwind-style utilities.
+- The plugin adds a light reset (border-box, body font `var(--font)`, `--text` on `--bg`).
 
 ## Components
 Create `components/Toast.html`, use it as `<x-toast text="Salvo" tone="success"></x-toast>`

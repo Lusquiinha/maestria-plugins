@@ -100,6 +100,18 @@ test('design_open with a name creates the folder, then opens the view for the ca
   assert.match(t, /# Design canvas guide/);
 });
 
+test('design_open on a repo without tailwind says the boards are plain css', async () => {
+  const host = fakeHost();
+  const plain = path.join(home, 'semtw', 'app');
+  fs.mkdirSync(path.join(plain, '.git'), { recursive: true });
+  const r = await tools.handle('design_open', { name: 'tela' }, ctxOf(host, { cwd: plain, tabId: 'plain' }));
+  assert.ok(!r.isError, textOf(r));
+  const t = textOf(r);
+  assert.match(t, /estilo: CSS puro/);
+  assert.match(t, /styles\/theme\.css/);
+  assert.doesNotMatch(t, /^cores do tailwind/m);
+});
+
 test('design_open reuses the last canvas of the tab when no name is given', async () => {
   const host = fakeHost();
   await tools.handle('design_open', { name: 'a' }, ctxOf(host));
@@ -469,8 +481,11 @@ test('design_open with repo builds the canvas next to that repo and lists its v4
   assert.match(textOf(r), /cores do tailwind do projeto: ink, brand/);
 });
 
-test('design_open for a repo without tailwind points to the default palette', async () => {
+test('a canvas made before plain css, on a repo without tailwind, keeps the default palette', async () => {
   const host = fakeHost();
+  const dir = path.join(mono, 'design', 'rust');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'design.json'), JSON.stringify({ repo: path.join(mono, 'api'), darkMode: { class: 'dark' }, css: [], brand: null, head: '' }));
   const r = await tools.handle('design_open', { name: 'rust', repo: 'api' }, ctxOf(host, { cwd: mono }));
   assert.ok(!r.isError, textOf(r));
   assert.match(textOf(r), /o projeto não tem tailwind; use a paleta padrão do Tailwind v4/);
