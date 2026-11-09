@@ -3,7 +3,7 @@
 
 const path = require('path');
 const { tinted, colorOf } = require('./links');
-const { STATES, MAX_BULLETS } = require('./cards');
+const { STATES, MAX_BULLETS, RESTING } = require('./cards');
 const { proofOf, audioOf, ProofError } = require('./proof');
 
 const KINDS = ['command', 'question', 'approve'];
@@ -136,6 +136,22 @@ async function rename({ tabId, name }, ctx) {
   return ok({ tabId, title: (r && r.title) || title });
 }
 
+async function close({ tabId }, ctx) {
+  const { links } = ctx;
+  if (!tabId) throw new ToolError('tabId é obrigatório.');
+  if (tabId === ctx.tabId) throw new ToolError('Não dá pra fechar a própria sessão.');
+  const me = links.byTab(ctx.tabId);
+  const key = links.byTab(tabId);
+  if (!me || !key || !links.subtree(me).includes(key)) throw new ToolError(`A aba ${tabId} não está na sua árvore; só fecha quem você abriu ou ligou.`);
+  const s = await liveTab(ctx, tabId);
+  if (s.kind !== 'claude') throw new ToolError(`A aba ${tabId} não é uma sessão do claude.`);
+  if (!s.hibernated && !RESTING.has(s.status)) {
+    throw new ToolError(`A sessão ${tabId} está ${s.statusLabel || s.status}; só fecha quando ela termina o turno e não está esperando o usuário.`);
+  }
+  await ctx.request('session.close', { tabId });
+  return ok({ tabId, closed: true });
+}
+
 function optionsOf(raw) {
   if (raw == null) return [];
   if (!Array.isArray(raw)) throw new ToolError('action.options precisa ser uma lista.');
@@ -205,7 +221,7 @@ async function card({ tabId, state, headline, bullets, action, proof }, ctx) {
   return ok({ tabId, state, cards: links.subtree(links.rootOf(key)).length - 1, ...takeAnswers(ctx) });
 }
 
-const HANDLERS = { sessions_open: open, sessions_list: list, sessions_send: send, sessions_rename: rename, sessions_card: card };
+const HANDLERS = { sessions_open: open, sessions_list: list, sessions_send: send, sessions_rename: rename, sessions_card: card, sessions_close: close };
 
 async function handle(name, args, ctx) {
   const fn = HANDLERS[name];

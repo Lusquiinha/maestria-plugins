@@ -285,3 +285,27 @@ test('sessions_card com prova inválida não transforma quem chama em gerente', 
   assert.deepEqual(ctx.links.nodes, {});
   assert.equal(ctx.calls.some((c) => c.method === 'session.rename'), false);
 });
+
+test('sessions_close fecha só uma sessão da sua árvore que terminou o turno', async () => {
+  const sessions = [
+    { id: 'me', kind: 'claude', title: 'gerente' },
+    { id: 'pronta', kind: 'claude', title: 'p', status: 'idle' },
+    { id: 'dorme', kind: 'claude', title: 'd', status: 'working', hibernated: true },
+    { id: 'ocupada', kind: 'claude', title: 'o', status: 'tool', statusLabel: 'Rodando' },
+    { id: 'prompt', kind: 'claude', title: 'q', status: 'waitingPermission', statusLabel: 'Permissão' },
+    { id: 'alheia', kind: 'claude', title: 'a', status: 'idle' },
+  ];
+  const ctx = makeCtx({ sessions });
+  const me = ctx.links.add({ tabId: 'me', name: 'gerente', manager: true });
+  for (const t of ['pronta', 'dorme', 'ocupada', 'prompt']) ctx.links.add({ tabId: t, parent: me, name: t });
+  ctx.links.add({ tabId: 'outro', name: 'outro', manager: true });
+  ctx.links.add({ tabId: 'alheia', parent: ctx.links.byTab('outro'), name: 'alheia' });
+  const closed = () => ctx.calls.filter((c) => c.method === 'session.close').map((c) => c.params.tabId);
+  for (const t of ['pronta', 'dorme']) assert.deepEqual(body(await tools.handle('sessions_close', { tabId: t }, ctx)), { tabId: t, closed: true });
+  for (const [t, re] of [['ocupada', /Rodando/], ['prompt', /Permissão/], ['alheia', /árvore/], ['me', /própria/], [undefined, /obrigatório/]]) {
+    const r = await tools.handle('sessions_close', { tabId: t }, ctx);
+    assert.equal(r.isError, true, t);
+    assert.match(r.content[0].text, re);
+  }
+  assert.deepEqual(closed(), ['pronta', 'dorme']);
+});

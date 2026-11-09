@@ -22,7 +22,8 @@
   "permissions": [
     "sessions.create",
     "terminal.write",
-    "hooks"
+    "hooks",
+    "sessions.close"
   ],
   "contributes": {
     "tools": [
@@ -105,6 +106,23 @@
           "required": [
             "tabId",
             "name"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "sessions_close",
+        "description": "Close the tab of a session in your manager tree (one you opened or linked), for example once its card is done. Refused while it is working or waiting for the user, and for your own tab.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "tabId": {
+              "type": "string",
+              "description": "The session to close, from sessions_list."
+            }
+          },
+          "required": [
+            "tabId"
           ],
           "additionalProperties": false
         }
