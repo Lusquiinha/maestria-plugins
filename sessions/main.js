@@ -1,13 +1,15 @@
 'use strict';
 
 const fs = require('fs');
+const { spawn } = require('child_process');
 const os = require('os');
 const path = require('path');
 const mx = require('./maestria');
 const tools = require('./lib/tools');
 const { Links, tinted, bare } = require('./lib/links');
 const { sidebar } = require('./lib/tree');
-const { panel } = require('./lib/cards');
+const { panel, detail } = require('./lib/cards');
+const { deliver } = require('./lib/answers');
 
 const MANAGER_BRIEF = [
   'Você é um gerente de sessões na Maestria. Divida o trabalho e delegue: abra uma sessão por frente com sessions_open',
@@ -16,8 +18,35 @@ const MANAGER_BRIEF = [
   'coordene, junte os resultados e reporte.',
 ].join(' ');
 
-const state = { links: new Links(), file: null, dataDir: null, timer: null, panels: new Set() };
+const state = {
+  links: new Links(),
+  file: null,
+  dataDir: null,
+  timer: null,
+  panels: new Set(),
+  probed: false,
+  modal: null,
+  live: {},
+  ui: { picked: {}, rejecting: {}, clears: {}, open: {}, showOld: false, playing: null },
+};
 const PANEL = 'painel:';
+const CARD = 'cartao:';
+const IMAGE = 'imagem:';
+const LIBRARY = fs.readFileSync(path.join(__dirname, 'ui', 'panel.rfwtxt'), 'utf8');
+
+/** O que a sessão está fazendo agora, a partir do último PreToolUse. */
+function liveLine(payload) {
+  const name = (payload && payload.tool_name) || '';
+  const input = (payload && payload.tool_input) || {};
+  if (input.description) return String(input.description);
+  if (input.file_path) return `${name} ${path.basename(String(input.file_path))}`;
+  if (name === 'Bash' && input.command) return String(input.command).split('\n')[0].slice(0, 100);
+  return name;
+}
+
+const withLive = (sessions) =>
+  sessions.map((s) => (state.live[s.id] ? { ...s, activity: { ...(s.activity || {}), lastTool: state.live[s.id] } } : s));
+const listSessions = async () => withLive((await mx.request('sessions.list')) || []);
 
 const isDir = (p) => {
   try {
@@ -47,28 +76,37 @@ function load() {
 }
 
 async function refresh() {
-  const sessions = (await mx.request('sessions.list')) || [];
+  const sessions = await listSessions();
   if (state.links.reconcile(sessions)) {
     try {
       fs.writeFileSync(state.file, JSON.stringify(state.links.toJSON()));
     } catch {}
   }
   await mx.request('sidebar.update', sidebar(state.links, sessions));
+  if (!state.probed) {
+    state.probed = true;
+    for (const key of state.links.roots()) state.panels.add(key);
+  }
   for (const key of [...state.panels]) {
     if (!state.links.nodes[key]) {
       state.panels.delete(key);
       continue;
     }
-    const r = await mx.request('view.update', { viewId: PANEL + key, ...panel(state.links, key, sessions) }).catch(() => ({ open: false }));
+    const r = await mx.request('view.update', { viewId: PANEL + key, ...panel(state.links, key, sessions, LIBRARY, state.ui) }).catch(() => ({ open: false }));
     if (!r || r.open === false) state.panels.delete(key);
+  }
+  if (state.modal) {
+    const d = detail(state.links, state.modal, sessions, state.ui);
+    const r = d ? await mx.request('view.update', { viewId: CARD + state.modal, data: d }).catch(() => ({ open: false })) : { open: false };
+    if (!r || r.open === false) state.modal = null;
   }
 }
 
 /** Abre (ou traz pra tela) a janela de cartões do gerente [key]. */
 async function showPanel(key, focus = false) {
   if (state.panels.has(key) && !focus) return schedule();
-  const sessions = (await mx.request('sessions.list')) || [];
-  await mx.request('view.open', { viewId: PANEL + key, ...panel(state.links, key, sessions) });
+  const sessions = await listSessions();
+  await mx.request('view.open', { viewId: PANEL + key, ...panel(state.links, key, sessions, LIBRARY, state.ui) });
   state.panels.add(key);
 }
 
@@ -126,9 +164,119 @@ mx.onRequest('command.invoke', ({ command, context }) => {
   return null;
 });
 
-mx.onNotification('event', ({ type }) => {
+mx.onNotification('event', ({ type, tabId, name, payload }) => {
+  if (type === 'hook' && tabId) {
+    if (name === 'PreToolUse') state.live[tabId] = liveLine(payload);
+    else if (name === 'Stop' || name === 'SessionEnd') delete state.live[tabId];
+  }
   if (type === 'sidebar.shown' || type === 'hook' || String(type).startsWith('session.')) schedule();
 });
+
+async function openCard(key) {
+  const d = detail(state.links, key, await listSessions(), state.ui);
+  if (!d) return null;
+  state.modal = key;
+  return mx.request('view.open', { viewId: CARD + key, title: d.title, modal: true, width: 980, height: 720, rfw: { library: LIBRARY, root: 'detail' }, data: d });
+}
+
+function stopAudio() {
+  const p = state.ui.playing;
+  state.ui.playing = null;
+  if (p && p.proc) p.proc.kill();
+}
+
+/** Toca (ou para) um áudio do cartão: as opções de uma pergunta ou os áudios da prova. */
+function toggleAudio(key, kind, i) {
+  const id = `${kind}:${i}`;
+  const was = state.ui.playing;
+  stopAudio();
+  if (was && was.key === key && was.id === id) return schedule();
+  const card = state.links.nodes[key] && state.links.nodes[key].card;
+  const file = kind === 'opt' ? card && card.action && card.action.options[i] && card.action.options[i].audio : card && card.proof && card.proof.audio[i] && card.proof.audio[i].path;
+  if (!file) return null;
+  const [cmd, args] = process.platform === 'darwin' ? ['afplay', [file]] : ['ffplay', ['-nodisp', '-autoexit', '-loglevel', 'quiet', file]];
+  const proc = spawn(cmd, args, { stdio: 'ignore' });
+  const playing = { key, id, proc };
+  const done = () => {
+    if (state.ui.playing === playing) {
+      state.ui.playing = null;
+      schedule();
+    }
+  };
+  proc.on('exit', done);
+  proc.on('error', (e) => {
+    done();
+    mx.request('window.showBanner', { text: `sessions: não tocou o áudio (${cmd}: ${e.message})` }).catch(() => {});
+  });
+  state.ui.playing = playing;
+  return schedule();
+}
+
+async function answer(key, text) {
+  stopAudio();
+  const { via, title } = await deliver(key, text, { links: state.links, request: mx.request, sessions: await listSessions() });
+  delete state.ui.picked[key];
+  delete state.ui.rejecting[key];
+  state.ui.clears[key] = (state.ui.clears[key] || 0) + 1;
+  save();
+  const where = via === 'terminal' ? title : 'o gerente (a aba está num prompt)';
+  return mx.request('window.showBanner', { text: `resposta enviada para ${where}` }).catch(() => {});
+}
+
+/** As ações de um cartão; [values] traz o texto de um campo. */
+async function onCard(verb, key, rest, values) {
+  const node = state.links.nodes[key];
+  const card = node && node.card;
+  const action = card && card.action;
+  const flip = (bag) => {
+    bag[key] = !bag[key];
+    return schedule();
+  };
+  if (verb === 'detail') return openCard(key);
+  if (verb === 'notes') return flip(state.ui.open);
+  if (verb === 'reject') return flip(state.ui.rejecting);
+  if (verb === 'play') return toggleAudio(key, rest[0], Number(rest[1]));
+  if (verb === 'pick') {
+    state.ui.picked[key] = Number(rest[0]);
+    return schedule();
+  }
+  if (!action) return null;
+  if (verb === 'send' && action.kind === 'command' && action.tabId) {
+    await mx.request('terminal.sendText', { tabId: action.tabId, text: action.text, submit: false });
+    return mx.request('session.focus', { tabId: action.tabId });
+  }
+  if (verb === 'copy') {
+    await mx.request('clipboard.write', { text: action.text });
+    return mx.request('window.showBanner', { text: 'comando copiado' }).catch(() => {});
+  }
+  const option = (i) => action.options[i] && `${action.options[i].key}: ${action.options[i].label}`;
+  if (verb === 'option') return option(Number(rest[0])) ? answer(key, option(Number(rest[0]))) : null;
+  if (verb === 'use') return state.ui.picked[key] != null && option(state.ui.picked[key]) ? answer(key, option(state.ui.picked[key])) : null;
+  if (verb === 'approve') return answer(key, 'Aprovado.');
+  if (verb === 'answer') {
+    const text = String((values && values.text) || '').trim();
+    if (!text) return null;
+    return answer(key, state.ui.rejecting[key] ? `Rejeitado: ${text}` : text);
+  }
+  return null;
+}
+
+async function onProof(verb, key, i) {
+  const card = state.links.nodes[key] && state.links.nodes[key].card;
+  const proof = card && card.proof;
+  if (!proof) return null;
+  if (verb === 'pr' && proof.prs[i]) return mx.request('window.openUrl', { url: proof.prs[i].url });
+  if (verb === 'image' && proof.images[i]) {
+    return mx.request('view.open', {
+      viewId: IMAGE + key,
+      title: path.basename(proof.images[i].path),
+      modal: true,
+      rfw: { library: LIBRARY, root: 'image' },
+      data: { path: proof.images[i].rel },
+    });
+  }
+  return null;
+}
 
 async function retitle(keys) {
   const sessions = (await mx.request('sessions.list')) || [];
@@ -139,26 +287,20 @@ async function retitle(keys) {
   }
 }
 
-async function onAction(act) {
-  const [verb, a, b] = act.split(':');
+const CARD_VERBS = ['detail', 'notes', 'reject', 'play', 'pick', 'send', 'copy', 'option', 'use', 'approve', 'answer'];
+
+async function onAction(act, values) {
+  const [verb, a, b, ...more] = act.split(':');
+  if (CARD_VERBS.includes(verb)) return onCard(verb, a, [b, ...more], values);
+  if (verb === 'pr' || verb === 'image') return onProof(verb, a, Number(b));
   const links = state.links;
   const titleOf = async (tabId) => ((await mx.request('sessions.list')) || []).find((s) => s.id === tabId)?.title || tabId;
   if (verb === 'novo') return createManager();
   if (verb === 'focus') return mx.request('session.focus', { tabId: a });
   if (verb === 'panel') return showPanel(a, true);
-  if (verb === 'send') {
-    const n = links.nodes[links.byTab(a)];
-    const act = n && n.card && n.card.action;
-    if (!act || act.kind !== 'command' || !act.tabId) return null;
-    await mx.request('terminal.sendText', { tabId: act.tabId, text: act.text, submit: false });
-    return mx.request('session.focus', { tabId: act.tabId });
-  }
-  if (verb === 'copy') {
-    const n = links.nodes[links.byTab(a)];
-    const text = n && n.card && n.card.action && n.card.action.text;
-    if (!text) return null;
-    await mx.request('clipboard.write', { text });
-    return mx.request('window.showBanner', { text: 'comando copiado' }).catch(() => {});
+  if (verb === 'older') {
+    state.ui.showOld = !state.ui.showOld;
+    return schedule();
   }
   if (verb === 'manager') {
     const { key } = links.ensure(a, await titleOf(a));
@@ -190,9 +332,10 @@ async function onAction(act) {
 }
 
 mx.onNotification('view.action', ({ viewId, action, values }) => {
-  if (viewId !== 'sidebar' && !String(viewId).startsWith(PANEL)) return;
-  const act = String(action || (values && values.action) || '');
-  onAction(act).catch((e) => {
+  const id = String(viewId);
+  if (id !== 'sidebar' && ![PANEL, CARD, IMAGE].some((p) => id.startsWith(p))) return;
+  const act = String(action === 'act' ? values && values.a : action || (values && values.action) || '');
+  onAction(act, values).catch((e) => {
     mx.log('ação', act, e.message);
     mx.request('window.showBanner', { text: `sessions: ${e.message}` }).catch(() => {});
   });
