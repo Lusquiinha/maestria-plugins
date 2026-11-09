@@ -29,7 +29,7 @@ test('quem espera você ganha do cartão; sem cartão, o status ao vivo decide',
   assert.equal(taskOf({ title: 'faz a task#88832', branch: '' }), 'TASK#88832');
 });
 
-test('o quadro separa as três colunas: quem espera mais em cima, trabalhando mais recente em cima, feito só de hoje', () => {
+test('o quadro separa as três colunas na ordem de entrada na árvore (precisa de você: primeiro quem entrou antes), feito só de hoje', () => {
   const { l, g, kid } = setup();
   kid('a', { state: 'needs_you', since: min(5) });
   kid('b', { state: 'needs_you', since: min(90) });
@@ -40,14 +40,14 @@ test('o quadro separa as três colunas: quem espera mais em cima, trabalhando ma
   const sessions = ['g', 'a', 'b', 'c', 'd', 'e', 'f'].map((id) => ({ id, title: `TASK#${id.charCodeAt(0)} ${id}`, status: 'ready', cwd: '/home/w/r' }));
   const b = board(l, g, sessions, {}, NOW);
   const c = cols(b);
-  assert.deepEqual(c.needs_you.map((x) => x.title), ['b', 'a']);
+  assert.deepEqual(c.needs_you.map((x) => x.title), ['a', 'b']);
   assert.deepEqual(c.working.map((x) => x.title), ['d', 'c']);
   assert.deepEqual(c.done.map((x) => x.title), ['e']);
   assert.equal(b.older, 'ontem e antes · 1');
   assert.deepEqual(b.cols.map((x) => x.count), ['2', '2', '1']);
-  assert.equal(c.needs_you[0].age, 'há 1 h');
-  assert.equal(c.needs_you[1].age, 'há 5 min');
-  assert.equal(c.needs_you[0].task, '#98');
+  assert.equal(c.needs_you[0].age, 'há 5 min');
+  assert.equal(c.needs_you[1].age, 'há 1 h');
+  assert.equal(c.needs_you[1].task, '#98');
   assert.equal(b.folder, '~/r');
   assert.equal(b.total, '6 sessões');
 });
@@ -210,4 +210,17 @@ test('cada cartão tem a sua caixa de resposta, e limpar uma não limpa as outra
   assert.notEqual(c[0].input, c[1].input);
   assert.ok(c.every((x) => x.input === `answer-${x.key}`));
   assert.deepEqual(Object.fromEntries(c.map((x) => [x.title, x.clear])), { a: 3, b: 0 });
+});
+
+test('responder um cartão do meio não o tira do lugar, nem quando ele responde de volta', () => {
+  const { l, g, kid } = setup();
+  const ks = ['a', 'b', 'c'].map((t) => kid(t, { state: 'working', since: min(30) }));
+  const ses = (over = {}) => [{ id: 'g' }, ...['a', 'b', 'c'].map((id) => ({ id, title: id, status: 'tool', ...over[id] }))];
+  const order = (b) => Object.fromEntries(b.cols.map((x) => [x.state, x.cards.map((y) => y.title)]));
+  assert.deepEqual(order(board(l, g, ses(), {}, NOW)).working, ['c', 'b', 'a']);
+  l.nodes[ks[1]].card = { ...l.nodes[ks[1]].card, since: NOW, answered: { text: 'ok', at: NOW } };
+  assert.deepEqual(order(board(l, g, ses(), {}, NOW)).working, ['c', 'b', 'a']);
+  for (const k of ks) l.nodes[k].card = { state: 'working', since: NOW - 1000, answered: { text: 'ok', at: NOW - 1000 } };
+  const replied = { a: { status: 'idle', reply: { text: 'r', at: NOW } }, b: { status: 'idle', reply: { text: 'r', at: NOW - 600 } }, c: { status: 'idle', reply: { text: 'r', at: NOW - 900 } } };
+  assert.deepEqual(order(board(l, g, ses(replied), {}, NOW)).needs_you, ['a', 'b', 'c']);
 });

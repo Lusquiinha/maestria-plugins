@@ -183,10 +183,12 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
   };
 }
 
+const seqOf = (key) => Number(String(key).slice(1)) || 0;
+
+/** Ordem fixa dentro da coluna (a de entrada na árvore), pra um cartão não pular quando você mexe nele. */
 function order(a, b) {
   if (a.state !== b.state) return 0;
-  if (a.state === 'needs_you') return a.sinceMs - b.sinceMs;
-  return b.sinceMs - a.sinceMs;
+  return a.state === 'needs_you' ? seqOf(a.key) - seqOf(b.key) : seqOf(b.key) - seqOf(a.key);
 }
 
 /** Os dados do quadro do gerente [key]. */
