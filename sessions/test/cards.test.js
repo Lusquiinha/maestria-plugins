@@ -224,3 +224,19 @@ test('responder um cartão do meio não o tira do lugar, nem quando ele responde
   const replied = { a: { status: 'idle', reply: { text: 'r', at: NOW } }, b: { status: 'idle', reply: { text: 'r', at: NOW - 600 } }, c: { status: 'idle', reply: { text: 'r', at: NOW - 900 } } };
   assert.deepEqual(order(board(l, g, ses(replied), {}, NOW)).needs_you, ['a', 'b', 'c']);
 });
+
+test('resposta longa: o cartão mostra o começo e oferece a inteira no cartão aberto', () => {
+  const { l, g, kid } = setup();
+  kid('a', { state: 'working', answered: { text: 'x', at: 1 } });
+  kid('b', { state: 'working', answered: { text: 'y', at: 1 } });
+  kid('c', { state: 'working', answered: { text: 'z', at: 1 } });
+  const sessions = [
+    { id: 'g' },
+    { id: 'a', title: 'a', status: 'idle', reply: { text: 'l\n'.repeat(12), at: 2 } },
+    { id: 'b', title: 'b', status: 'idle', reply: { text: 'curta', at: 2 } },
+    { id: 'c', title: 'c', status: 'idle', reply: { text: 'palavra '.repeat(50), at: 2 } },
+  ];
+  const by = Object.fromEntries(cols(board(l, g, sessions, {}, NOW)).needs_you.map((x) => [x.title, x]));
+  assert.deepEqual([by.a.replyLong, by.b.replyLong, by.c.replyLong], [true, false, true]);
+  assert.equal(by.a.acts.detail, `detail:${by.a.key}`);
+});

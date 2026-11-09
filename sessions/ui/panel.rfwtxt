@@ -327,16 +327,25 @@ widget Reply = Column(
   children: [
     Gap(
       child: Container(
-        constraints: { maxHeight: 220.0 },
         padding: [10.0, 8.0, 10.0, 8.0],
         decoration: {
           type: "box",
           color: data.theme.hover,
           border: [{ color: data.theme.accent, width: 3.0 }, { style: "none" }, { style: "none" }, { style: "none" }],
         },
-        child: SingleChildScrollView(primary: false, child: Text(text: args.c.reply, style: { fontSize: 12.5, color: data.theme.fg, height: 1.4 })),
+        child: switch args.full {
+          true: Text(text: args.c.reply, style: { fontSize: 12.5, color: data.theme.fg, height: 1.4 }),
+          default: Text(text: args.c.reply, maxLines: 8, overflow: "ellipsis", style: { fontSize: 12.5, color: data.theme.fg, height: 1.4 }),
+        },
       ),
     ),
+    switch args.full {
+      true: SizedBox(),
+      default: switch args.c.replyLong {
+        true: Gap(child: Row(children: [Btn(label: "ver resposta inteira", icon: "open", act: args.c.acts.detail)])),
+        default: SizedBox(),
+      },
+    },
     Answer(c: args.c, hint: "responda (vai direto para a aba)"),
     Gap(child: Row(children: [Btn(label: "ir para a aba", icon: "open", act: args.c.acts.focus, kind: "pri")])),
   ],
@@ -615,6 +624,7 @@ widget detail = SingleChildScrollView(
                   "command": Command(c: data.card),
                   "question": Question(c: data.card),
                   "approve": Approve(c: data.card),
+                  "reply": Reply(c: data.card, full: true),
                   default: SizedBox(),
                 },
                 switch data.card.hasNotes {
