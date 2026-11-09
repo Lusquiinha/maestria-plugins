@@ -2,7 +2,7 @@
 // A aba da lateral: cada gerente com as sessões dele embaixo, quem precisa de você primeiro, e as prontas dobradas.
 
 const { colorOf, bare } = require('./links');
-const { stateOf, liveOf } = require('./cards');
+const { stateOf, liveOf, waitOf } = require('./cards');
 
 const STATUS_TONE = {
   working: 'accent',
@@ -37,7 +37,8 @@ function managersMenu(links, except) {
 /** O que a linha diz embaixo do nome: o pedido do cartão, o que está fazendo, ou o status. */
 function subtitleOf(st, card, session) {
   const act = (session && session.activity) || {};
-  if (st === 'needs_you') return (card && (card.headline || (card.action && card.action.text))) || (session && session.statusLabel) || 'esperando você';
+  if (st === 'needs_you' && card && card.state === 'needs_you') return card.headline || (card.action && card.action.text) || waitOf(session);
+  if (st === 'needs_you') return waitOf(session);
   if (st === 'working') return act.lastTool || (card && card.headline) || act.lastPrompt || (session && session.statusLabel) || '';
   return (card && card.headline) || (session && session.statusLabel) || '';
 }

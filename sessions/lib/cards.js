@@ -77,6 +77,9 @@ function howTo(text, canSend) {
   return claudeCommand(text) ? 'Copie e cole no prompt do Claude, depois Enter' : 'Copie e cole no terminal';
 }
 
+const WAITS = { waitingAnswer: 'Pergunta na aba.', waitingPermission: 'Permissão na aba.' };
+const waitOf = (session) => WAITS[session && session.status] || `Esperando você na aba (${(session && session.statusLabel) || 'pergunta'}).`;
+
 function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
   const state = stateOf(card, session);
   const task = session ? taskOf(session) : null;
@@ -86,17 +89,19 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
   const bullets = c.bullets || [];
   const target = action && action.tabId ? live.get(action.tabId) : null;
   const prompt = Boolean(session && PROMPT.has(session.status));
-  let kind = action ? action.kind : 'none';
-  if (state === 'needs_you' && !action) kind = 'wait';
-  const options = action && action.options ? action.options : [];
+  const tabAsks = Boolean(session && session.needsYou) && c.state !== 'needs_you';
+  let kind = action && !tabAsks ? action.kind : 'none';
+  if (tabAsks || (state === 'needs_you' && !action)) kind = 'wait';
+  const options = action && action.options && !tabAsks ? action.options : [];
   const audible = options.some((o) => o.audio);
   const picked = ui.picked[key];
   const playing = ui.playing && ui.playing.key === key ? ui.playing.id : null;
   const headline =
+    (tabAsks && waitOf(session)) ||
     c.headline ||
     (kind === 'question' || kind === 'approve' ? action.text : '') ||
     (kind === 'command' ? (target ? `Rode na aba ${bare(target.title)}.` : 'Rode este comando.') : '') ||
-    (kind === 'wait' ? `Esperando você na aba (${(session && session.statusLabel) || 'pergunta'}).` : '');
+    (kind === 'wait' ? waitOf(session) : '');
   const since = c.since || c.at || now;
   const activity = (session && session.activity) || {};
   return {
@@ -234,4 +239,4 @@ function panel(links, key, sessions, library, ui, now) {
   return { title: `painel · ${data.name}`, rfw: { library, root: 'root' }, data };
 }
 
-module.exports = { panel, board, detail, cardData, liveOf, stateOf, taskOf, STATES, MAX_BULLETS, PROMPT };
+module.exports = { panel, board, detail, cardData, liveOf, stateOf, taskOf, STATES, MAX_BULLETS, PROMPT, waitOf };

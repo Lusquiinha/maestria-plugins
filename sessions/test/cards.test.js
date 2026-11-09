@@ -110,7 +110,7 @@ test('sessão num prompt avisa que a resposta vai pro gerente; sem cartão, pede
   assert.equal(a.prompt, true);
   assert.equal(a.kind, 'approve');
   assert.equal(p.kind, 'wait');
-  assert.equal(p.headline, 'Esperando você na aba (Pergunta).');
+  assert.equal(p.headline, 'Pergunta na aba.');
   assert.equal(p.acts.focus, 'focus:p');
 });
 
@@ -159,4 +159,23 @@ test('o de antes de hoje abre e fecha, e o topo não repete a pasta quando ela �
   b = board(l, g, sessions, { showOld: true }, NOW);
   assert.equal(b.older, 'esconder os de antes de hoje');
   assert.equal(cols(b).done.length, 1);
+});
+
+test('a aba pedindo você passa por cima de um cartão velho: vai pra Precisa de você com o pedido da aba', () => {
+  const { l, g, kid } = setup();
+  kid('p', { state: 'working', headline: 'Rotulando', action: { kind: 'command', text: 'ls', tabId: 'p', options: [] } });
+  kid('q', { state: 'done', headline: 'feito' });
+  kid('m', { state: 'needs_you', headline: 'Aprova?', action: { kind: 'approve', text: 'Aprova?', options: [] } });
+  const sessions = [
+    { id: 'g' },
+    { id: 'p', title: 'p', status: 'waitingAnswer', needsYou: true },
+    { id: 'q', title: 'q', status: 'waitingPermission', needsYou: true },
+    { id: 'm', title: 'm', status: 'waitingPermission', needsYou: true },
+  ];
+  const c = cols(board(l, g, sessions, {}, NOW));
+  assert.equal(c.working.length + c.done.length, 0);
+  const by = Object.fromEntries(c.needs_you.map((x) => [x.title, x]));
+  assert.deepEqual([by.p.kind, by.p.headline, by.p.command], ['wait', 'Pergunta na aba.', '']);
+  assert.deepEqual([by.q.kind, by.q.headline], ['wait', 'Permissão na aba.']);
+  assert.deepEqual([by.m.kind, by.m.headline, by.m.prompt], ['approve', 'Aprova?', true]);
 });
