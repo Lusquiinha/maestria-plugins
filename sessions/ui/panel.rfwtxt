@@ -191,9 +191,18 @@ widget Command = Column(
       child: Container(
         padding: [12.0, 9.0, 12.0, 9.0],
         decoration: { type: "box", color: data.theme.hover, borderRadius: [{ x: 6.0 }] },
-        child: Text(text: ["$ ", args.c.command], style: { fontSize: 12.0, fontFamily: data.theme.mono, color: data.theme.fg }),
+        child: Text(
+          text: [switch args.c.shell { true: "$ ", default: "" }, args.c.command],
+          style: { fontSize: 12.0, fontFamily: data.theme.mono, color: data.theme.fg },
+        ),
       ),
     ),
+    SizedBox(height: 6.0),
+    Text(text: args.c.howTo, style: { fontSize: 11.0, color: data.theme.dim }),
+    switch args.c.where {
+      "": SizedBox(),
+      default: Text(text: args.c.where, maxLines: 1, overflow: "ellipsis", style: { fontSize: 11.0, color: data.theme.faint }),
+    },
     Gap(
       child: Row(
         children: [
@@ -210,15 +219,6 @@ widget Command = Column(
             true: IconBtn(icon: "open", tip: "ir para a aba", act: args.c.acts.target),
             default: SizedBox(),
           },
-          SizedBox(width: 8.0),
-          Expanded(
-            child: Text(
-              text: switch args.c.canSend { true: "digita sem Enter", default: args.c.where },
-              maxLines: 1,
-              overflow: "ellipsis",
-              style: { fontSize: 11.0, color: data.theme.faint },
-            ),
-          ),
         ],
       ),
     ),

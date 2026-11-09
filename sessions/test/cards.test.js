@@ -60,12 +60,25 @@ test('cartão de comando: enviar para a aba quando ela existe, copiar quando nã
   const [x, y] = cols(board(l, g, sessions, {}, NOW)).needs_you;
   assert.equal(x.kind, 'command');
   assert.equal(x.canSend, true);
-  assert.equal(x.sendLabel, 'Enviar para TASK#9 thumb');
+  assert.equal(x.sendLabel, 'Enviar para a aba');
+  assert.equal(x.shell, true);
+  assert.equal(x.howTo, 'Clique em Enviar → na aba, aperte Enter');
   assert.equal(x.headline, 'Rode na aba TASK#9 thumb.');
   assert.equal(x.acts.send, `send:${a}`);
   assert.equal(x.acts.target, 'focus:alvo');
   assert.equal(y.canSend, false);
   assert.equal(y.where, 'aba fechada');
+  assert.equal(y.howTo, 'Copie e cole no terminal');
+});
+
+test('comando "!" é pro prompt do Claude: sem "$", e caminhos não quebram no meio', () => {
+  const { l, g, kid } = setup();
+  kid('a', { state: 'needs_you', action: { kind: 'command', text: '! python3 /tmp/a-b/run.py | jq .', options: [] } });
+  const [x] = cols(board(l, g, [{ id: 'g' }, { id: 'a', title: 'a' }], {}, NOW)).needs_you;
+  assert.equal(x.shell, false);
+  assert.equal(x.howTo, 'Copie e cole no prompt do Claude, depois Enter');
+  assert.equal(x.command.replace(/\u2060/g, ''), '! python3 /tmp/a-b/run.py | jq .');
+  assert.match(x.command, /python3 \u2060\/\u2060tmp\u2060\/\u2060a\u2060-\u2060b/);
 });
 
 test('pergunta com opções vira botões; com áudio, vira a lista de ouvir e escolher', () => {
