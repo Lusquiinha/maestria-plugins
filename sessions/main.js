@@ -27,7 +27,7 @@ const state = {
   probed: false,
   modal: null,
   live: {},
-  ui: { picked: {}, rejecting: {}, clears: {}, open: {}, showOld: false, playing: null },
+  ui: { picked: {}, rejecting: {}, clears: {}, open: {}, unfolded: {}, showOld: false, playing: null },
 };
 const PANEL = 'painel:';
 const CARD = 'cartao:';
@@ -82,7 +82,7 @@ async function refresh() {
       fs.writeFileSync(state.file, JSON.stringify(state.links.toJSON()));
     } catch {}
   }
-  await mx.request('sidebar.update', sidebar(state.links, sessions));
+  await mx.request('sidebar.update', sidebar(state.links, sessions, state.ui));
   if (!state.probed) {
     state.probed = true;
     for (const key of state.links.roots()) state.panels.add(key);
@@ -300,6 +300,10 @@ async function onAction(act, values) {
   if (verb === 'panel') return showPanel(a, true);
   if (verb === 'older') {
     state.ui.showOld = !state.ui.showOld;
+    return schedule();
+  }
+  if (verb === 'fold') {
+    state.ui.unfolded[a] = !state.ui.unfolded[a];
     return schedule();
   }
   if (verb === 'manager') {

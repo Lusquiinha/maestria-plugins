@@ -38,33 +38,46 @@ test('um tabId reaproveitado por outra conversa não herda o nó', () => {
   assert.equal(l.nodes[k].seenAt, 0);
 });
 
-test('a lateral desenha a árvore na cor do gerente, com o selo de quem espera você', () => {
+test('a lateral põe quem precisa de você primeiro, com o pedido do cartão, e dobra as prontas', () => {
+  const now = 10 * 60000;
   const l = new Links({}, () => 0);
   const root = l.add({ tabId: 't1', name: 'gerente', manager: true });
-  l.add({ tabId: 't2', parent: root, name: 'filho' });
-  l.add({ tabId: 't3', parent: root, name: 'fechado' });
-  const { blocks, badge } = sidebar(l, [
+  const done = l.add({ tabId: 't4', parent: root, name: 'pronto' });
+  const work = l.add({ tabId: 't3', parent: root, name: 'trabalha' });
+  const ask = l.add({ tabId: 't2', parent: root, name: 'pergunta' });
+  l.nodes[done].card = { state: 'done', headline: 'feito', doneAt: 0 };
+  l.nodes[work].card = { state: 'working', since: 0 };
+  l.nodes[ask].card = { state: 'needs_you', headline: 'Aprova as telas?', since: 4 * 60000 };
+  const sessions = [
     { id: 't1', title: '● gerente', status: 'working', statusLabel: 'pensando' },
-    { id: 't2', title: '● filho', status: 'waitingAnswer', statusLabel: 'pergunta', needsYou: true, activity: { lastPrompt: 'faz X' } },
-  ]);
-  const items = blocks[1].items;
-  assert.deepEqual(items.map((i) => [i.title, i.avatar.color]), [['gerente', '#E5534B'], ['├─ filho', '#E5534B'], ['└─ fechado', '#E5534B']]);
-  assert.equal(items[1].subtitle, 'pergunta · faz X');
-  assert.equal(items[1].status, 'yellow');
+    { id: 't2', title: '● TASK#2 pergunta', status: 'ready', needsYou: true },
+    { id: 't3', title: '● trabalha', status: 'tool', activity: { lastTool: 'npm test' } },
+    { id: 't4', title: '● pronto', status: 'idle' },
+  ];
+  let { blocks, badge } = sidebar(l, sessions, {}, now);
+  let items = blocks[1].items;
+  assert.deepEqual(items.map((i) => [i.title, i.indent]), [['gerente', 0], ['TASK#2 pergunta', 1], ['trabalha', 1], ['1 pronta', 1]]);
+  assert.equal(items[0].subtitle, '1 precisa de você · 1 trabalhando · 1 pronta');
+  assert.equal(items[0].avatar.color, '#E5534B');
+  assert.deepEqual([items[1].subtitle, items[1].avatar.color, items[1].meta, items[1].metaTone], ['Aprova as telas?', 'red', '6 min', 'red']);
+  assert.deepEqual([items[2].subtitle, items[2].avatar.color], ['npm test', 'yellow']);
   assert.equal(items[1].action, 'focus:t2');
-  assert.equal(items[2].dim, true);
+  assert.equal(items[3].action, `fold:${root}`);
   assert.equal(badge, '1');
+  items = sidebar(l, sessions, { unfolded: { [root]: true } }, now).blocks[1].items;
+  assert.deepEqual(items.map((i) => i.title), ['gerente', 'TASK#2 pergunta', 'trabalha', 'pronto', 'esconder as prontas']);
 });
 
-test('a árvore desenha os galhos do tree em mais de um nível', () => {
+test('a árvore recua cada nível e um sub-gerente vem antes das sessões', () => {
   const l = new Links({}, () => 0);
   const r = l.add({ tabId: 'a', name: 'g', manager: true });
   const c1 = l.add({ tabId: 'b', parent: r, name: 'c1' });
   l.add({ tabId: 'c', parent: c1, name: 'n1' });
   l.add({ tabId: 'd', parent: r, name: 'c2' });
-  const live = ['a', 'b', 'c', 'd'].map((id) => ({ id, title: id }));
-  const titles = sidebar(l, live).blocks[1].items.map((i) => i.title);
-  assert.deepEqual(titles, ['a', '├─ b', '│   └─ c', '└─ d']);
+  const live = ['a', 'b', 'c', 'd'].map((id) => ({ id, title: id, status: 'tool' }));
+  const items = sidebar(l, live).blocks[1].items;
+  assert.deepEqual(items.map((i) => [i.title, i.indent]), [['a', 0], ['b', 1], ['c', 2], ['d', 1]]);
+  assert.equal(items[1].strong, true);
 });
 
 test('as sessões soltas aparecem embaixo com tornar gerente e ligar a um gerente', () => {
