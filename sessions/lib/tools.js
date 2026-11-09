@@ -4,6 +4,10 @@
 const path = require('path');
 const { tinted, colorOf } = require('./links');
 const { STATES, MAX_BULLETS } = require('./cards');
+const { proofOf, audioOf, ProofError } = require('./proof');
+
+const KINDS = ['command', 'question', 'approve'];
+const MAX_OPTIONS = 6;
 
 const ok = (v) => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }] });
 const fail = (s) => ({ content: [{ type: 'text', text: String(s) }], isError: true });
@@ -91,7 +95,17 @@ async function list({ mine }, ctx) {
     const me = ctx.links.byTab(ctx.tabId);
     out = out.filter((s) => me && s.parentTabId === ctx.tabId);
   }
-  return ok({ sessions: out });
+  return ok({ sessions: out, ...takeAnswers(ctx) });
+}
+
+/** As respostas que o usuário deu nos cartões deste gerente desde a última leitura (e as esvazia). */
+function takeAnswers(ctx) {
+  const n = ctx.links.node(ctx.links.byTab(ctx.tabId));
+  if (!n || !n.inbox || !n.inbox.length) return {};
+  const answers = n.inbox;
+  n.inbox = [];
+  ctx.save();
+  return { answers };
 }
 
 async function send({ tabId, text }, ctx) {
@@ -122,15 +136,50 @@ async function rename({ tabId, name }, ctx) {
   return ok({ tabId, title: (r && r.title) || title });
 }
 
-async function card({ tabId, state, bullets, action }, ctx) {
+function optionsOf(raw) {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) throw new ToolError('action.options precisa ser uma lista.');
+  if (raw.length > MAX_OPTIONS) throw new ToolError(`No máximo ${MAX_OPTIONS} opções.`);
+  return raw.map((o, i) => {
+    const label = String((o && o.label) || '').trim();
+    if (!label) throw new ToolError('cada opção precisa de label.');
+    return {
+      key: String((o && o.key) || String.fromCharCode(65 + i)).trim().slice(0, 3),
+      label,
+      recommended: Boolean(o && o.recommended),
+      audio: o && o.audio ? audioOf(o.audio).path : null,
+    };
+  });
+}
+
+function actionOf(action) {
+  if (!action) return null;
+  if (!action.text || !KINDS.includes(action.kind)) throw new ToolError(`action precisa de text e de kind ${KINDS.map((k) => `"${k}"`).join(', ')}.`);
+  const options = optionsOf(action.options);
+  if (options.length && action.kind !== 'question') throw new ToolError('options só vale numa action "question".');
+  return {
+    kind: action.kind,
+    text: String(action.text),
+    where: action.where ? String(action.where) : null,
+    tabId: action.tabId || null,
+    options,
+  };
+}
+
+async function card({ tabId, state, headline, bullets, action, proof }, ctx) {
   if (!STATES.includes(state)) throw new ToolError(`state precisa ser um de: ${STATES.join(', ')}.`);
   const list = (Array.isArray(bullets) ? bullets : []).map((b) => String(b).trim()).filter(Boolean);
   if (list.length > MAX_BULLETS) throw new ToolError(`No máximo ${MAX_BULLETS} bullets por cartão.`);
-  if (action && (!action.text || !['command', 'question'].includes(action.kind))) {
-    throw new ToolError('action precisa de text e de kind "command" ou "question".');
-  }
+  const act = actionOf(action);
   const s = await liveTab(ctx, tabId);
-  if (action && action.tabId) await liveTab(ctx, action.tabId);
+  if (act && act.tabId) await liveTab(ctx, act.tabId);
+  let staged;
+  try {
+    staged = proofOf(proof, ctx.dataDir);
+  } catch (e) {
+    if (e instanceof ProofError) throw new ToolError(e.message);
+    throw e;
+  }
   const parent = await parentOf(ctx);
   if (!parent) throw new ToolError('Só um gerente escreve cartões: chame de uma sessão da Maestria.');
   const { links } = ctx;
@@ -139,17 +188,21 @@ async function card({ tabId, state, bullets, action }, ctx) {
     key = links.link(tabId, parent, s.title);
     await ctx.request('session.rename', { tabId, title: tinted(s.title, links.nodes[key].color) }).catch(() => {});
   }
+  const prev = links.nodes[key].card || {};
+  const now = Date.now();
   links.nodes[key].card = {
     state,
+    headline: headline ? String(headline).trim() : null,
     bullets: list,
-    action: action
-      ? { kind: action.kind, text: String(action.text), where: action.where ? String(action.where) : null, tabId: action.tabId || null }
-      : null,
-    at: Date.now(),
+    action: act,
+    proof: staged,
+    at: now,
+    since: prev.state === state && prev.since ? prev.since : now,
+    doneAt: state === 'done' ? (prev.state === 'done' && prev.doneAt) || now : null,
   };
   ctx.save();
   if (ctx.showPanel) await ctx.showPanel(links.rootOf(key));
-  return ok({ tabId, state, cards: links.subtree(links.rootOf(key)).length - 1 });
+  return ok({ tabId, state, cards: links.subtree(links.rootOf(key)).length - 1, ...takeAnswers(ctx) });
 }
 
 const HANDLERS = { sessions_open: open, sessions_list: list, sessions_send: send, sessions_rename: rename, sessions_card: card };

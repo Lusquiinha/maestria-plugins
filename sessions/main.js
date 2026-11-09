@@ -16,7 +16,7 @@ const MANAGER_BRIEF = [
   'coordene, junte os resultados e reporte.',
 ].join(' ');
 
-const state = { links: new Links(), file: null, timer: null, panels: new Set() };
+const state = { links: new Links(), file: null, dataDir: null, timer: null, panels: new Set() };
 const PANEL = 'painel:';
 
 const isDir = (p) => {
@@ -105,6 +105,7 @@ const ctx = ({ tabId, cwd }) => ({
   cwd,
   tabId,
   isDir,
+  dataDir: state.dataDir,
   links: state.links,
   save,
   showPanel,
@@ -112,7 +113,8 @@ const ctx = ({ tabId, cwd }) => ({
 });
 
 mx.onRequest('initialize', (params) => {
-  state.file = path.join(params.dataDir || path.join(os.homedir(), '.maestria-rs', 'plugin-data', 'maestria.sessions'), 'links.json');
+  state.dataDir = params.dataDir || null;
+  state.file = path.join(state.dataDir || path.join(os.homedir(), '.maestria-rs', 'plugin-data', 'maestria.sessions'), 'links.json');
   load();
   return {};
 });

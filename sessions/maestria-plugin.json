@@ -54,7 +54,7 @@
       },
       {
         "name": "sessions_list",
-        "description": "List the open Maestria sessions: tabId, title, folder, branch, status, whether it waits for the user, its manager (parentTabId) and color, and its last prompt and last reply. Pass mine: true for only the sessions you opened.",
+        "description": "List the open Maestria sessions: tabId, title, folder, branch, status, whether it waits for the user, its manager (parentTabId) and color, and its last prompt and last reply. Pass mine: true for only the sessions you opened. When you are a manager, `answers` carries what the user answered on your cards since your last call.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -111,7 +111,7 @@
       },
       {
         "name": "sessions_card",
-        "description": "Set or replace the card of a session you manage, in your manager panel (a Maestria window with one card per session, needs-you cards on top, live status). Use it instead of writing status reports in chat. state: working, needs_you or done. Up to 3 short bullets. action: a command for the user to copy (kind \"command\") or a question for the user (kind \"question\"), with where it should run (tabId when it is a Maestria tab). A session not yet in your tree is linked to you.",
+        "description": "Set or replace the card of a session you manage, in your manager panel (a Maestria board: needs-you, working, done today). Use it instead of writing status reports in chat. state: working, needs_you or done. headline: one sentence, what the user has to do (or what is happening). Up to 3 short bullets (the session's notes, folded on the card). action: a command for the user to run (kind \"command\", tabId = the tab it belongs to: the card types it there), a question (kind \"question\", optional options A/B/C, each with an optional audio file to listen to) or an approval (kind \"approve\": approve / reject with a reason). Answers go straight into the session's terminal (to you instead while it sits in a permission prompt), and you get a copy in the `answers` of your next sessions_list or sessions_card. proof: images (absolute paths, shown as thumbnails), prs (url, ci), audio (absolute paths) and log (the last lines of a run). A session not yet in your tree is linked to you.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -126,6 +126,10 @@
                 "needs_you",
                 "done"
               ]
+            },
+            "headline": {
+              "type": "string",
+              "description": "One sentence: what the user has to do, or what the session is doing."
             },
             "bullets": {
               "type": "array",
@@ -142,12 +146,13 @@
                   "type": "string",
                   "enum": [
                     "command",
-                    "question"
+                    "question",
+                    "approve"
                   ]
                 },
                 "text": {
                   "type": "string",
-                  "description": "The full command, or the question."
+                  "description": "The full command, the question, or what to approve."
                 },
                 "where": {
                   "type": "string",
@@ -156,12 +161,106 @@
                 "tabId": {
                   "type": "string",
                   "description": "The tab where it belongs. The card then offers \"ir para a aba\" and, for a command, \"enviar para a aba\" (types it into that tab without pressing Enter)."
+                },
+                "options": {
+                  "type": "array",
+                  "maxItems": 6,
+                  "description": "Choices for a question; clicking one answers with it.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string"
+                      },
+                      "key": {
+                        "type": "string",
+                        "description": "Short key shown on the button. Default A, B, C…"
+                      },
+                      "recommended": {
+                        "type": "boolean"
+                      },
+                      "audio": {
+                        "type": "string",
+                        "description": "Absolute path of an audio clip to listen to before choosing."
+                      }
+                    },
+                    "required": [
+                      "label"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [
                 "kind",
                 "text"
               ],
+              "additionalProperties": false
+            },
+            "proof": {
+              "type": "object",
+              "description": "What shows the work: thumbnails, PRs, audio, log.",
+              "properties": {
+                "images": {
+                  "type": "array",
+                  "maxItems": 12,
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Absolute paths of screenshots (png, jpg, webp)."
+                },
+                "prs": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "url": {
+                        "type": "string"
+                      },
+                      "label": {
+                        "type": "string"
+                      },
+                      "ci": {
+                        "type": "string",
+                        "enum": [
+                          "ok",
+                          "running",
+                          "failed",
+                          "none"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "url"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "audio": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "label": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "log": {
+                  "type": "string",
+                  "description": "The last lines of a run (tests, build)."
+                }
+              },
               "additionalProperties": false
             }
           },

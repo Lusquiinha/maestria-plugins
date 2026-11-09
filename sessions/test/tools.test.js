@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const tools = require('../lib/tools');
 const { Links } = require('../lib/links');
 
@@ -180,7 +183,10 @@ test('sessions_card guarda o cartão, liga a sessão ao gerente e abre o painel'
   const me = ctx.links.byTab('me');
   const w = ctx.links.nodes[ctx.links.byTab('w')];
   assert.equal(w.parent, me);
-  assert.deepEqual({ ...w.card, at: 0 }, { state: 'needs_you', bullets: ['a', 'b'], action: { kind: 'question', text: 'posso?', where: null, tabId: null }, at: 0 });
+  assert.deepEqual({ ...w.card, at: 0, since: 0 }, {
+    state: 'needs_you', headline: null, bullets: ['a', 'b'], action: { kind: 'question', text: 'posso?', where: null, tabId: null, options: [] },
+    proof: null, at: 0, since: 0, doneAt: null,
+  });
   assert.deepEqual(shown, [me]);
   assert.ok(ctx.calls.some((c) => c.method === 'session.rename' && c.params.tabId === 'w' && c.params.title === '● TASK#5 worker'));
 });
@@ -193,8 +199,89 @@ test('sessions_card recusa estado, bullets e action inválidos', async () => {
     { tabId: 'w', state: 'done', action: { kind: 'x', text: 'a' } },
     { tabId: 'nada', state: 'done' },
     { tabId: 'w', state: 'done', action: { kind: 'command', text: 'ls', tabId: 'nada' } },
+    { tabId: 'w', state: 'done', action: { kind: 'command', text: 'ls', options: [{ label: 'a' }] } },
+    { tabId: 'w', state: 'done', action: { kind: 'question', text: 'q', options: [{ label: ' ' }] } },
+    { tabId: 'w', state: 'done', action: { kind: 'question', text: 'q', options: [{ label: 'a', audio: '/nada.mp3' }] } },
+    { tabId: 'w', state: 'done', proof: { images: ['relativo.png'] } },
+    { tabId: 'w', state: 'done', proof: { prs: [{ url: 'ftp://x' }] } },
+    { tabId: 'w', state: 'done', proof: { prs: [{ url: 'https://x', ci: 'verde' }] } },
   ]) {
     const ctx = makeCtx({ sessions });
     assert.equal((await tools.handle('sessions_card', args, ctx)).isError, true, JSON.stringify(args));
   }
+});
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'sessions-'));
+const worker = [{ id: 'me', kind: 'claude', title: 'g' }, { id: 'w', kind: 'claude', title: 'w' }];
+
+test('sessions_card guarda headline, opções com áudio e aprovação', async () => {
+  const dir = tmp();
+  const clip = path.join(dir, 'f_04 viva.mp3');
+  fs.writeFileSync(clip, 'x');
+  const ctx = makeCtx({ sessions: worker });
+  const action = { kind: 'question', text: 'qual voz?', options: [{ label: 'f_01' }, { label: 'f_04', recommended: true, audio: clip }] };
+  await tools.handle('sessions_card', { tabId: 'w', state: 'needs_you', headline: ' Escolha a voz. ', action }, ctx);
+  const c = ctx.links.nodes[ctx.links.byTab('w')].card;
+  assert.equal(c.headline, 'Escolha a voz.');
+  assert.deepEqual(c.action.options, [
+    { key: 'A', label: 'f_01', recommended: false, audio: null },
+    { key: 'B', label: 'f_04', recommended: true, audio: clip },
+  ]);
+  const res = await tools.handle('sessions_card', { tabId: 'w', state: 'needs_you', action: { kind: 'approve', text: 'aprova as telas?' } }, ctx);
+  assert.equal(res.isError, undefined);
+  assert.equal(ctx.links.nodes[ctx.links.byTab('w')].card.action.kind, 'approve');
+});
+
+test('sessions_card copia as imagens da prova pra pasta de dados e normaliza PRs, áudio e log', async () => {
+  const src = tmp();
+  const dataDir = tmp();
+  const shot = path.join(src, 'Tela.PNG');
+  fs.writeFileSync(shot, 'png');
+  const ctx = makeCtx({ sessions: worker, dataDir });
+  const proof = { images: [shot], prs: ['https://github.com/cefis/atrium-backend/pull/97', { url: 'https://x/y', label: 'docs', ci: 'ok' }], log: '  11 passed  ' };
+  await tools.handle('sessions_card', { tabId: 'w', state: 'done', proof }, ctx);
+  const p = ctx.links.nodes[ctx.links.byTab('w')].card.proof;
+  assert.match(p.images[0].rel, /^proof\/[0-9a-f]{16}\.png$/);
+  assert.equal(p.images[0].path, shot);
+  assert.equal(fs.readFileSync(path.join(dataDir, p.images[0].rel), 'utf8'), 'png');
+  assert.deepEqual(p.prs, [{ url: 'https://github.com/cefis/atrium-backend/pull/97', label: 'atrium-backend #97', ci: 'none' }, { url: 'https://x/y', label: 'docs', ci: 'ok' }]);
+  assert.equal(p.log, '11 passed');
+  assert.equal((await tools.handle('sessions_card', { tabId: 'w', state: 'done', proof: { images: [shot] } }, makeCtx({ sessions: worker }))).isError, true);
+});
+
+test('sessions_card marca desde quando o estado vale e quando ficou pronto', async () => {
+  const ctx = makeCtx({ sessions: worker });
+  const card = () => ctx.links.nodes[ctx.links.byTab('w')].card;
+  await tools.handle('sessions_card', { tabId: 'w', state: 'working' }, ctx);
+  const since = card().since;
+  card().since = since - 5000;
+  await tools.handle('sessions_card', { tabId: 'w', state: 'working', bullets: ['x'] }, ctx);
+  assert.equal(card().since, since - 5000);
+  assert.equal(card().doneAt, null);
+  await tools.handle('sessions_card', { tabId: 'w', state: 'done' }, ctx);
+  const doneAt = card().doneAt;
+  assert.ok(doneAt >= since);
+  card().doneAt = 7;
+  await tools.handle('sessions_card', { tabId: 'w', state: 'done', bullets: ['y'] }, ctx);
+  assert.equal(card().doneAt, 7);
+});
+
+test('as respostas dadas nos cartões chegam uma vez ao gerente, no sessions_list e no sessions_card', async () => {
+  const ctx = makeCtx({ sessions: worker });
+  await tools.handle('sessions_card', { tabId: 'w', state: 'needs_you' }, ctx);
+  const me = ctx.links.nodes[ctx.links.byTab('me')];
+  const answer = { tabId: 'w', title: 'w', text: 'A', at: 1, via: 'terminal' };
+  me.inbox = [answer];
+  assert.deepEqual(body(await tools.handle('sessions_list', {}, ctx)).answers, [answer]);
+  assert.equal(body(await tools.handle('sessions_list', {}, ctx)).answers, undefined);
+  me.inbox = [{ tabId: 'w', title: 'w', text: 'B', at: 2, via: 'manager' }];
+  assert.equal(body(await tools.handle('sessions_card', { tabId: 'w', state: 'working' }, ctx)).answers[0].text, 'B');
+});
+
+test('sessions_card com prova inválida não transforma quem chama em gerente', async () => {
+  const ctx = makeCtx({ sessions: [{ id: 'me', kind: 'claude', title: 'solta' }, { id: 'w', kind: 'claude', title: 'w' }] });
+  const res = await tools.handle('sessions_card', { tabId: 'w', state: 'done', proof: { prs: ['ftp://x'] } }, ctx);
+  assert.equal(res.isError, true);
+  assert.deepEqual(ctx.links.nodes, {});
+  assert.equal(ctx.calls.some((c) => c.method === 'session.rename'), false);
 });
