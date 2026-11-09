@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "O btop num modal por cima da tela, num clique no rodapé da lateral: CPU, memória, disco, rede e processos, sem abrir painel nem mexer nos terminais. Fecha no esc, no x ou no clique fora.",
   "author": "Lucas",
-  "maestria": 1,
+  "maestria": "3.6.2",
   "main": [
     "node",
     "main.js"
