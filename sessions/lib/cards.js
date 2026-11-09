@@ -158,7 +158,7 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
     useLabel: audible && picked != null && options[picked] ? `Usar ${options[picked].label}` : '',
     canUse: audible && picked != null && Boolean(options[picked]),
     rejecting: Boolean(ui.rejecting[key]),
-    input: kind === 'question' || kind === 'approve' ? `answer-${key}` : '',
+    input: `answer-${key}`,
     clear: ui.clears[key] || 0,
     live: state === 'working' ? plain(activity.lastTool || activity.lastMessage).slice(0, 140) : '',
     hasLive: state === 'working' && Boolean(activity.lastTool || activity.lastMessage),

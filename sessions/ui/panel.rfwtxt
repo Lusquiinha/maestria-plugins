@@ -348,6 +348,8 @@ widget Answer = Gap(
     placeholder: args.hint,
     clear: args.c.clear,
     fontSize: 12.5,
+    multiline: true,
+    maxLines: 5,
     sendIcon: "send",
     onSubmit: event "act" { a: args.c.acts.answer },
   ),

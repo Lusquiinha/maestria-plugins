@@ -198,3 +198,16 @@ test('a sessão que respondeu à sua resposta volta pra Precisa de você, com a 
   assert.equal(r.acts.focus, 'focus:r');
   assert.deepEqual(c.working.map((x) => x.title).sort(), ['o', 'w']);
 });
+
+test('cada cartão tem a sua caixa de resposta, e limpar uma não limpa as outras', () => {
+  const { l, g, kid } = setup();
+  const a = kid('a', { state: 'working', answered: { text: 'x', at: 1 } });
+  kid('b', { state: 'working', answered: { text: 'y', at: 1 } });
+  const sessions = [{ id: 'g' }, { id: 'a', title: 'a', status: 'idle', reply: { text: 'ra', at: 2 } }, { id: 'b', title: 'b', status: 'ready', reply: { text: 'rb', at: 2 } }];
+  const ui = { picked: {}, rejecting: {}, clears: { [a]: 3 }, open: {}, playing: null };
+  const c = cols(board(l, g, sessions, ui, NOW)).needs_you;
+  assert.deepEqual(c.map((x) => x.kind), ['reply', 'reply']);
+  assert.notEqual(c[0].input, c[1].input);
+  assert.ok(c.every((x) => x.input === `answer-${x.key}`));
+  assert.deepEqual(Object.fromEntries(c.map((x) => [x.title, x.clear])), { a: 3, b: 0 });
+});

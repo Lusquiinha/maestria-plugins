@@ -252,6 +252,11 @@ async function onCard(verb, key, rest, values) {
     state.ui.picked[key] = Number(rest[0]);
     return schedule();
   }
+  if (verb === 'answer') {
+    const text = String((values && values.text) || '').trim();
+    if (!text) return null;
+    return answer(key, state.ui.rejecting[key] ? `Rejeitado: ${text}` : text);
+  }
   if (!action) return null;
   if (verb === 'send' && action.kind === 'command' && action.tabId) {
     await mx.request('terminal.sendText', { tabId: action.tabId, text: action.text, submit: false });
@@ -265,11 +270,6 @@ async function onCard(verb, key, rest, values) {
   if (verb === 'option') return option(Number(rest[0])) ? answer(key, option(Number(rest[0]))) : null;
   if (verb === 'use') return state.ui.picked[key] != null && option(state.ui.picked[key]) ? answer(key, option(state.ui.picked[key])) : null;
   if (verb === 'approve') return answer(key, 'Aprovado.');
-  if (verb === 'answer') {
-    const text = String((values && values.text) || '').trim();
-    if (!text) return null;
-    return answer(key, state.ui.rejecting[key] ? `Rejeitado: ${text}` : text);
-  }
   return null;
 }
 
