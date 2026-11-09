@@ -111,8 +111,11 @@ async function showPanel(key, focus = false) {
 }
 
 function schedule() {
-  clearTimeout(state.timer);
-  state.timer = setTimeout(() => refresh().catch((e) => mx.log('lateral:', e.message)), 300);
+  if (state.timer) return;
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    refresh().catch((e) => mx.log('lateral:', e.message));
+  }, 300);
 }
 
 async function createManager(context = {}) {
