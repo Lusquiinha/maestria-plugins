@@ -1,0 +1,186 @@
+{
+  "id": "maestria.sessions",
+  "name": "Sessions",
+  "version": "1.0.0",
+  "description": "Gerentes de sessões na Maestria: um claude gerente abre e conduz outras sessões como ferramenta, e cada gerente tem uma cor (como a lã do Minecraft) que as sessões dele herdam no nome da aba. A aba da lateral mostra a árvore: cada gerente com as sessões que abriu, o status e quem espera você. E o painel do gerente: uma janela com um cartão por sessão que ele conduz, ao vivo, que o próprio gerente preenche (sessions_card), com quem precisa de você em cima.",
+  "icon": "icons/sessions.svg",
+  "author": "William",
+  "maestria": 1,
+  "main": [
+    "node",
+    "main.js"
+  ],
+  "activationEvents": [
+    "onTool:sessions_open",
+    "onTool:sessions_list",
+    "onTool:sessions_send",
+    "onTool:sessions_rename",
+    "onTool:sessions_card",
+    "onCommand:gerente",
+    "onSession"
+  ],
+  "permissions": [
+    "sessions.create",
+    "terminal.write",
+    "hooks"
+  ],
+  "contributes": {
+    "tools": [
+      {
+        "name": "sessions_open",
+        "description": "Open a new Claude Code session as a Maestria tab, in the background, and send it a first prompt. The calling session becomes its manager: the new tab is linked to you in the Maestria manager tree and gets your color. The prompt must stand alone: the new session knows nothing of this conversation. Returns the tabId.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Folder the session starts in: an existing directory, absolute, ~/ or relative to your cwd."
+            },
+            "name": {
+              "type": "string",
+              "description": "Tab title, short (e.g. \"TASK#88832 sessions plugin\")."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "First message of the session. Omit to open it idle."
+            }
+          },
+          "required": [
+            "cwd",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "sessions_list",
+        "description": "List the open Maestria sessions: tabId, title, folder, branch, status, whether it waits for the user, its manager (parentTabId) and color, and its last prompt and last reply. Pass mine: true for only the sessions you opened.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "mine": {
+              "type": "boolean",
+              "description": "Only the sessions this session opened."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "sessions_send",
+        "description": "Send a message to an existing Claude session, as if typed in its terminal and submitted. Refused while that session waits for the user (permission or question) or is hibernated. If it is busy, the message is queued by Claude Code.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "tabId": {
+              "type": "string",
+              "description": "Target tab, from sessions_list or sessions_open."
+            },
+            "text": {
+              "type": "string",
+              "description": "The message."
+            }
+          },
+          "required": [
+            "tabId",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "sessions_rename",
+        "description": "Rename a Maestria tab. A linked session keeps its manager color in front of the name.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "tabId": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string",
+              "description": "New tab title, short."
+            }
+          },
+          "required": [
+            "tabId",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "sessions_card",
+        "description": "Set or replace the card of a session you manage, in your manager panel (a Maestria window with one card per session, needs-you cards on top, live status). Use it instead of writing status reports in chat. state: working, needs_you or done. Up to 3 short bullets. action: a command for the user to copy (kind \"command\") or a question for the user (kind \"question\"), with where it should run (tabId when it is a Maestria tab). A session not yet in your tree is linked to you.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "tabId": {
+              "type": "string",
+              "description": "The session the card is about."
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "working",
+                "needs_you",
+                "done"
+              ]
+            },
+            "bullets": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 3,
+              "description": "Up to 3 short lines."
+            },
+            "action": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "command",
+                    "question"
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "description": "The full command, or the question."
+                },
+                "where": {
+                  "type": "string",
+                  "description": "Where to run it (tab, folder or machine). Optional."
+                },
+                "tabId": {
+                  "type": "string",
+                  "description": "The tab where it belongs. The card then offers \"ir para a aba\" and, for a command, \"enviar para a aba\" (types it into that tab without pressing Enter)."
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "tabId",
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "sidebar": true,
+    "commands": [
+      {
+        "id": "gerente",
+        "title": "sessions: novo gerente…",
+        "icon": "icons/sessions.svg",
+        "sidebar": true
+      }
+    ]
+  }
+}
