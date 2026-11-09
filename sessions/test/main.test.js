@@ -53,3 +53,18 @@ test('um cartão já respondido (action null) ainda manda a resposta nova pro te
   await tick();
   assert.deepEqual(sent(), [['w', 'A: sim'], ['w', 'e agora o backend']]);
 });
+
+test('depois de abrir o painel, os refresh mandam só os dados (o template de novo zera a rolagem)', async () => {
+  const panels = () => calls.filter(([m, p]) => (m === 'view.open' || m === 'view.update') && String(p.viewId).startsWith('painel:'));
+  await handlers.req['tool.call']({ tool: 'sessions_card', tabId: 'g', args: { tabId: 'w', state: 'working', headline: 'de novo' } });
+  await new Promise((r) => setTimeout(r, 400));
+  const all = panels();
+  const first = all.findIndex(([, p]) => p.rfw);
+  assert.ok(first >= 0);
+  const later = all.slice(first + 1);
+  assert.ok(later.length > 0);
+  for (const [, p] of later) {
+    assert.equal(p.rfw, undefined);
+    assert.ok(p.data);
+  }
+});

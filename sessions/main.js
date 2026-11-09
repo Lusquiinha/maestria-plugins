@@ -29,6 +29,7 @@ const state = {
   modal: null,
   live: {},
   ui: { picked: {}, rejecting: {}, clears: {}, open: {}, unfolded: {}, showOld: false, playing: null },
+  titles: new Map(),
 };
 const PANEL = 'painel:';
 const CARD = 'cartao:';
@@ -101,8 +102,11 @@ async function refresh() {
       state.panels.delete(key);
       continue;
     }
-    const r = await mx.request('view.update', { viewId: PANEL + key, ...panel(state.links, key, sessions, LIBRARY, state.ui) }).catch(() => ({ open: false }));
-    if (!r || r.open === false) state.panels.delete(key);
+    const r = await mx.request('view.update', panelUpdate(key, sessions)).catch(() => ({ open: false }));
+    if (!r || r.open === false) {
+      state.panels.delete(key);
+      state.titles.delete(key);
+    }
   }
   if (state.modal) {
     const d = detail(state.links, state.modal, sessions, state.ui);
@@ -111,11 +115,22 @@ async function refresh() {
   }
 }
 
+/** O template só vai na primeira vez por processo: reenviá-lo reconstrói a janela e zera a rolagem. */
+function panelUpdate(key, sessions) {
+  const p = panel(state.links, key, sessions, LIBRARY, state.ui);
+  const was = state.titles.get(key);
+  state.titles.set(key, p.title);
+  if (was === undefined) return { viewId: PANEL + key, ...p };
+  return { viewId: PANEL + key, data: p.data, ...(p.title !== was ? { title: p.title } : {}) };
+}
+
 /** Abre (ou traz pra tela) a janela de cartões do gerente [key]. */
 async function showPanel(key, focus = false) {
   if (state.panels.has(key) && !focus) return schedule();
   const sessions = await listSessions();
-  await mx.request('view.open', { viewId: PANEL + key, ...panel(state.links, key, sessions, LIBRARY, state.ui) });
+  const p = panel(state.links, key, sessions, LIBRARY, state.ui);
+  await mx.request('view.open', { viewId: PANEL + key, ...p });
+  state.titles.set(key, p.title);
   state.panels.add(key);
 }
 
