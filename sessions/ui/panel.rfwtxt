@@ -6,7 +6,9 @@ import maestria;
 widget root = Column(
   crossAxisAlignment: "stretch",
   children: [
+    Switch(),
     Top(),
+    Tell(),
     Container(height: 1.0, color: data.theme.border),
     Expanded(
       child: Padding(
@@ -46,6 +48,65 @@ widget Top = Padding(
     ],
   ),
 );
+
+widget Switch = switch data.hasSwitch {
+  true: Padding(
+    padding: [14.0, 10.0, 14.0, 0.0],
+    child: Wrap(
+      spacing: 6.0,
+      runSpacing: 6.0,
+      children: [
+        ...for m in data.managers:
+          ManagerChip(m: m),
+      ],
+    ),
+  ),
+  default: SizedBox(),
+};
+
+widget ManagerChip = Pressable(
+  radius: 6.0,
+  hoverColor: data.theme.hover,
+  onTap: event "act" { a: args.m.act },
+  child: Container(
+    padding: [9.0, 4.0, 9.0, 4.0],
+    decoration: {
+      type: "box",
+      color: switch args.m.active { true: data.theme.hover, default: 0x00000000 },
+      borderRadius: [{ x: 6.0 }],
+      border: [{ color: switch args.m.active { true: args.m.color, default: data.theme.border }, width: 1.0 }],
+    },
+    child: Row(
+      mainAxisSize: "min",
+      children: [
+        Dot(color: args.m.color, size: 8.0),
+        SizedBox(width: 6.0),
+        Text(text: args.m.name, style: { fontSize: 12.0, fontWeight: switch args.m.active { true: "w600", default: "w400" }, color: data.theme.fg }),
+        switch args.m.waiting {
+          "": SizedBox(),
+          default: Padding(padding: [6.0, 0.0, 0.0, 0.0], child: Pill(text: args.m.waiting, tone: "red")),
+        },
+      ],
+    ),
+  ),
+);
+
+widget Tell = switch data.canTell {
+  true: Padding(
+    padding: [18.0, 0.0, 14.0, 12.0],
+    child: TextInput(
+      id: data.tell.input,
+      placeholder: "mensagem para o gerente (vai direto para a aba dele)",
+      clear: data.tell.clear,
+      fontSize: 12.5,
+      multiline: true,
+      maxLines: 5,
+      sendIcon: "send",
+      onSubmit: event "act" { a: data.tell.act },
+    ),
+  ),
+  default: SizedBox(),
+};
 
 widget Lane = Padding(
   padding: [4.0, 0.0, 4.0, 0.0],
@@ -143,6 +204,10 @@ widget Card = Box(
       "reply": Reply(c: args.c),
       default: SizedBox(),
     },
+    switch args.c.canMessage {
+      true: Answer(c: args.c, act: args.c.acts.message, hint: "mensagem para a sessão (vai direto para a aba)"),
+      default: SizedBox(),
+    },
     Proofs(c: args.c),
     switch args.c.hasNotes {
       true: Notes(c: args.c),
@@ -237,7 +302,7 @@ widget Question = Column(
       true: Clips(c: args.c),
       default: SizedBox(),
     },
-    Answer(c: args.c, hint: "ou responda com suas palavras…"),
+    Answer(c: args.c, act: args.c.acts.answer, hint: "ou responda com suas palavras…"),
     Prompted(c: args.c),
   ],
 );
@@ -346,7 +411,7 @@ widget Reply = Column(
         default: SizedBox(),
       },
     },
-    Answer(c: args.c, hint: "responda (vai direto para a aba)"),
+    Answer(c: args.c, act: args.c.acts.answer, hint: "responda (vai direto para a aba)"),
     Gap(child: Row(children: [Btn(label: "ir para a aba", icon: "open", act: args.c.acts.focus, kind: "pri")])),
   ],
 );
@@ -360,7 +425,7 @@ widget Answer = Gap(
     multiline: true,
     maxLines: 5,
     sendIcon: "send",
-    onSubmit: event "act" { a: args.c.acts.answer },
+    onSubmit: event "act" { a: args.act },
   ),
 );
 
@@ -373,7 +438,7 @@ widget Approve = Column(
   crossAxisAlignment: "stretch",
   children: [
     switch args.c.rejecting {
-      true: Answer(c: args.c, hint: "por que rejeitar? (enter manda)"),
+      true: Answer(c: args.c, act: args.c.acts.answer, hint: "por que rejeitar? (enter manda)"),
       default: SizedBox(),
     },
     Gap(
@@ -530,10 +595,18 @@ widget Done = Box(
         ),
         SizedBox(width: 8.0),
         Text(text: args.c.age, style: { fontSize: 11.0, color: data.theme.faint }),
+        switch args.c.canMessage {
+          true: Padding(padding: [8.0, 0.0, 0.0, 0.0], child: IconBtn(icon: "send", tip: "mandar mensagem", act: args.c.acts.write)),
+          default: SizedBox(),
+        },
       ],
     ),
     switch args.c.hasHeadline {
       true: Padding(padding: [0.0, 6.0, 0.0, 0.0], child: Text(text: args.c.headline, maxLines: 2, overflow: "ellipsis", style: { fontSize: 12.0, color: data.theme.dim })),
+      default: SizedBox(),
+    },
+    switch args.c.writing {
+      true: Answer(c: args.c, act: args.c.acts.message, hint: "mensagem para a sessão (vai direto para a aba)"),
       default: SizedBox(),
     },
     Proofs(c: args.c),

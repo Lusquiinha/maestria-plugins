@@ -118,3 +118,21 @@ test('link move a subárvore pra cor do novo pai e recusa ciclo; promote dá cor
   const fresh = l.link('novo', red, 'novo');
   assert.equal(l.nodes[fresh].color, 'red');
 });
+
+test('gerente leva a marca dobrada; retitles só pede o que perdeu a marca e mantém o nome que a aba tem', () => {
+  const l = new Links({}, () => 1);
+  const g = l.add({ tabId: 'g', name: 'coord', manager: true });
+  l.add({ tabId: 'a', parent: g, name: 'a' });
+  l.add({ tabId: 'b', parent: g, name: 'b' });
+  const mark = tinted('x', l.nodes[g].color).split(' ')[0];
+  const sessions = [
+    { id: 'g', title: `${mark} renomeado` },
+    { id: 'a', title: `${mark} a` },
+    { id: 'b', title: 'b sem marca' },
+  ];
+  assert.deepEqual(l.retitles(sessions), [
+    { tabId: 'g', title: `${mark}${mark} renomeado` },
+    { tabId: 'b', title: `${mark} b sem marca` },
+  ]);
+  assert.equal(bare(`${mark}${mark} renomeado`), 'renomeado');
+});

@@ -43,7 +43,7 @@ async function parentOf(ctx) {
   }
   const me = (await sessionsOf(ctx)).find((s) => s.id === ctx.tabId);
   const { key } = links.ensure(ctx.tabId, me ? me.title : 'gerente');
-  const title = tinted(links.nodes[key].name, links.nodes[key].color);
+  const title = tinted(links.nodes[key].name, links.nodes[key].color, true);
   await ctx.request('session.rename', { tabId: ctx.tabId, title }).catch((e) => ctx.log && ctx.log('rename do gerente:', e.message));
   return key;
 }
@@ -127,7 +127,7 @@ async function rename({ tabId, name }, ctx) {
   if (!label) throw new ToolError('name é obrigatório.');
   await liveTab(ctx, tabId);
   const n = ctx.links.node(ctx.links.byTab(tabId));
-  const title = n ? tinted(label, n.color) : label;
+  const title = n ? tinted(label, n.color, n.manager) : label;
   const r = await ctx.request('session.rename', { tabId, title });
   if (n) {
     n.name = label;
@@ -202,7 +202,7 @@ async function card({ tabId, state, headline, bullets, action, proof }, ctx) {
   let key = links.byTab(tabId);
   if (!key || !links.subtree(parent).includes(key)) {
     key = links.link(tabId, parent, s.title);
-    await ctx.request('session.rename', { tabId, title: tinted(s.title, links.nodes[key].color) }).catch(() => {});
+    await ctx.request('session.rename', { tabId, title: tinted(s.title, links.nodes[key].color, links.nodes[key].manager) }).catch(() => {});
   }
   const prev = links.nodes[key].card || {};
   const now = Date.now();

@@ -8,7 +8,7 @@ const mx = require('./maestria');
 const tools = require('./lib/tools');
 const { Links, tinted, bare } = require('./lib/links');
 const { sidebar } = require('./lib/tree');
-const { panel, detail, RESTING } = require('./lib/cards');
+const { ALL, panel, detail, managerKeys, RESTING, PROMPT } = require('./lib/cards');
 const { deliver } = require('./lib/answers');
 const { replies } = require('./lib/replies');
 
@@ -24,14 +24,18 @@ const state = {
   file: null,
   dataDir: null,
   timer: null,
-  panels: new Set(),
+  current: ALL,
+  open: false,
+  showing: Promise.resolve(),
   probed: false,
   modal: null,
   live: {},
-  ui: { picked: {}, rejecting: {}, clears: {}, open: {}, unfolded: {}, showOld: false, playing: null },
-  titles: new Map(),
+  ui: { picked: {}, rejecting: {}, clears: {}, open: {}, writing: {}, unfolded: {}, showOld: false, playing: null },
+  title: undefined,
+  retitled: new Map(),
 };
-const PANEL = 'painel:';
+const PANEL = 'painel';
+const LEGACY_PANEL = 'painel:';
 const CARD = 'cartao:';
 const IMAGE = 'imagem:';
 const LIBRARY = fs.readFileSync(path.join(__dirname, 'ui', 'panel.rfwtxt'), 'utf8');
@@ -50,10 +54,9 @@ const withLive = (sessions) =>
   sessions.map((s) => (state.live[s.id] ? { ...s, activity: { ...(s.activity || {}), lastTool: state.live[s.id] } } : s));
 const readReply = replies(os.homedir());
 
-/** Junta a última resposta do Claude às sessões que você respondeu pelo cartão e que já fecharam o turno. */
+/** Junta a última resposta do Claude às conversas paradas (o cartão compara com ela, e a visão de todas a mostra). */
 function withReplies(sessions) {
-  const answered = new Set(Object.values(state.links.nodes).filter((n) => n.card && n.card.answered).map((n) => n.tabId));
-  return sessions.map((s) => (answered.has(s.id) && s.sessionId && !s.needsYou && RESTING.has(s.status) ? { ...s, reply: readReply(s.sessionId, s.cwd) } : s));
+  return sessions.map((s) => (s.kind === 'claude' && s.sessionId && !s.needsYou && RESTING.has(s.status) ? { ...s, reply: readReply(s.sessionId, s.cwd) } : s));
 }
 
 const listSessions = async () => withReplies(withLive((await mx.request('sessions.list')) || []));
@@ -92,20 +95,29 @@ async function refresh() {
       fs.writeFileSync(state.file, JSON.stringify(state.links.toJSON()));
     } catch {}
   }
+  const wrong = state.links.retitles(sessions);
+  for (const tabId of [...state.retitled.keys()]) if (!wrong.some((w) => w.tabId === tabId)) state.retitled.delete(tabId);
+  await Promise.all(
+    wrong
+      .filter(({ tabId, title }) => state.retitled.get(tabId) !== title)
+      .map(({ tabId, title }) => {
+        state.retitled.set(tabId, title);
+        return mx.request('session.rename', { tabId, title }).catch((e) => mx.log('rename:', e.message));
+      }),
+  );
   await mx.request('sidebar.update', sidebar(state.links, sessions, state.ui));
   if (!state.probed) {
     state.probed = true;
-    for (const key of state.links.roots()) state.panels.add(key);
+    await adopt(sessions);
   }
-  for (const key of [...state.panels]) {
-    if (!state.links.nodes[key]) {
-      state.panels.delete(key);
-      continue;
-    }
-    const r = await mx.request('view.update', panelUpdate(key, sessions)).catch(() => ({ open: false }));
+  if (state.current !== ALL && !managerKeys(state.links).includes(state.current)) state.current = ALL;
+  const liveTabs = new Set(sessions.filter((s) => !s.exited).map((s) => `@${s.id}`));
+  for (const bag of [state.ui.writing, state.ui.clears]) for (const k of Object.keys(bag)) if (k.startsWith('@') && !liveTabs.has(k)) delete bag[k];
+  if (state.open) {
+    const r = await mx.request('view.update', panelUpdate(sessions)).catch(() => ({ open: false }));
     if (!r || r.open === false) {
-      state.panels.delete(key);
-      state.titles.delete(key);
+      state.open = false;
+      state.title = undefined;
     }
   }
   if (state.modal) {
@@ -116,22 +128,66 @@ async function refresh() {
 }
 
 /** O template só vai na primeira vez por processo: reenviá-lo reconstrói a janela e zera a rolagem. */
-function panelUpdate(key, sessions) {
-  const p = panel(state.links, key, sessions, LIBRARY, state.ui);
-  const was = state.titles.get(key);
-  state.titles.set(key, p.title);
-  if (was === undefined) return { viewId: PANEL + key, ...p };
-  return { viewId: PANEL + key, data: p.data, ...(p.title !== was ? { title: p.title } : {}) };
+function panelUpdate(sessions) {
+  const p = panel(state.links, state.current, sessions, LIBRARY, state.ui);
+  const was = state.title;
+  state.title = p.title;
+  if (was === undefined) return { viewId: PANEL, ...p };
+  return { viewId: PANEL, data: p.data, ...(p.title !== was ? { title: p.title } : {}) };
 }
 
-/** Abre (ou traz pra tela) a janela de cartões do gerente [key]. */
-async function showPanel(key, focus = false) {
-  if (state.panels.has(key) && !focus) return schedule();
+/** Na subida: o painel único que ficou aberto continua; na primeira vez, os de antes (um por gerente) viram ele. */
+async function adopt(sessions) {
+  const keys = managerKeys(state.links);
+  if (state.current !== ALL && !keys.includes(state.current)) state.current = ALL;
+  const r = await mx.request('view.update', panelUpdate(sessions)).catch(() => ({ open: false }));
+  state.open = Boolean(r && r.open !== false);
+  if (!state.open) state.title = undefined;
+  const mark = state.dataDir && path.join(state.dataDir, 'painel-unico');
+  if (!mark || fs.existsSync(mark)) return;
+  try {
+    fs.writeFileSync(mark, '');
+  } catch {}
+  for (const key of [state.current, ...keys.filter((k) => k !== state.current)].filter((k) => k && k !== ALL)) {
+    const p = panel(state.links, key, sessions, LIBRARY, state.ui);
+    const r = await mx.request('view.update', { viewId: LEGACY_PANEL + key, ...p }).catch(() => ({ open: false }));
+    if (!r || r.open === false) continue;
+    await mx.request('view.close', { viewId: LEGACY_PANEL + key }).catch(() => {});
+    if (!state.open) await showPanel(key, 'raise');
+  }
+}
+
+/**
+ * Mostra o gerente [key] no painel único. [how]: 'card' (um cartão novo: não tira o painel de quem você olha),
+ * 'switch' (um chip do painel: troca no lugar) ou 'raise' (a lateral: troca e traz o painel pra frente).
+ */
+function showPanel(key, how = 'card') {
+  const run = state.showing.then(() => showPanelNow(key, how));
+  state.showing = run.catch(() => {});
+  return run;
+}
+
+async function showPanelNow(key, how) {
+  if (key !== ALL && !state.links.nodes[key]) return null;
   const sessions = await listSessions();
-  const p = panel(state.links, key, sessions, LIBRARY, state.ui);
-  await mx.request('view.open', { viewId: PANEL + key, ...p });
-  state.titles.set(key, p.title);
-  state.panels.add(key);
+  if (state.open) {
+    if (how !== 'card') state.current = key;
+    const r = await mx.request('view.update', panelUpdate(sessions)).catch(() => ({ open: false }));
+    if (r && r.open !== false && how !== 'raise') return null;
+    if (!r || r.open === false) state.open = false;
+  }
+  if (state.open && how === 'card') return null;
+  if (how !== 'card') state.current = key;
+  else if (state.current !== key) state.current = ALL;
+  state.open = true;
+  const p = panel(state.links, state.current, sessions, LIBRARY, state.ui);
+  state.title = p.title;
+  await mx.request('view.open', { viewId: PANEL, ...p }).catch((e) => {
+    state.open = false;
+    state.title = undefined;
+    throw e;
+  });
+  return null;
 }
 
 function schedule() {
@@ -142,18 +198,35 @@ function schedule() {
   }, 300);
 }
 
+const OTHER = ':outra-pasta';
+
+/** Pede um caminho até ser uma pasta que existe; null se cancelar. */
+async function askFolder() {
+  let value = '';
+  for (;;) {
+    const typed = await mx.request('window.input', { title: 'novo gerente: caminho da pasta', placeholder: '~/projetos/x ou /var/www/x', value });
+    value = String(typed || '').trim();
+    if (!value) return null;
+    const dir = path.resolve(os.homedir(), value.replace(/^~(?=$|\/)/, os.homedir()));
+    if (isDir(dir)) return dir;
+    await mx.request('window.showBanner', { text: `não é uma pasta: ${dir}` }).catch(() => {});
+  }
+}
+
 async function createManager(context = {}) {
   const folders = (await mx.request('folders.list').catch(() => [])) || [];
   const items = folders.map((f) => ({ value: f.root, label: f.name || path.basename(f.root), detail: f.root }));
   if (context.cwd && !items.some((i) => i.value === context.cwd)) items.unshift({ value: context.cwd, label: path.basename(context.cwd), detail: context.cwd });
-  const cwd = await mx.request('window.pick', { title: 'novo gerente: pasta', items });
+  items.push({ value: OTHER, label: 'outra pasta…', detail: 'digitar o caminho' });
+  const picked = await mx.request('window.pick', { title: 'novo gerente: pasta', items });
+  const cwd = picked === OTHER ? await askFolder() : picked;
   if (!cwd) return;
   const name = await mx.request('window.input', { title: 'novo gerente: nome', placeholder: 'ex.: tarefas do Wiboor' });
   if (!name) return;
   const ask = await mx.request('window.input', { title: 'novo gerente: primeiro pedido', placeholder: 'o que ele deve coordenar (vazio: só abre)' }).catch(() => null);
   const key = state.links.add({ tabId: null, name, manager: true });
   const node = state.links.nodes[key];
-  const params = { cwd, label: tinted(name, node.color), prompt: ask ? `${MANAGER_BRIEF}\n\nPedido: ${ask}` : MANAGER_BRIEF };
+  const params = { cwd, label: tinted(name, node.color, true), prompt: ask ? `${MANAGER_BRIEF}\n\nPedido: ${ask}` : MANAGER_BRIEF };
   try {
     const { tabId } = await mx.request('session.openClaude', params);
     node.tabId = tabId;
@@ -239,19 +312,55 @@ function toggleAudio(key, kind, i) {
   return schedule();
 }
 
-async function answer(key, text) {
+async function answer(key, text, message = false) {
   stopAudio();
-  const { via, title } = await deliver(key, text, { links: state.links, request: mx.request, sessions: await listSessions() });
+  const { via, title } = await deliver(key, text, { links: state.links, request: mx.request, sessions: await listSessions(), message });
   delete state.ui.picked[key];
   delete state.ui.rejecting[key];
+  delete state.ui.writing[key];
   state.ui.clears[key] = (state.ui.clears[key] || 0) + 1;
   save();
   const where = via === 'terminal' ? title : 'o gerente (a aba está num prompt)';
-  return mx.request('window.showBanner', { text: `resposta enviada para ${where}` }).catch(() => {});
+  return mx.request('window.showBanner', { text: `enviado para ${where}` }).catch(() => {});
+}
+
+/** Manda [text] direto pro gerente do painel [key]. */
+async function tell(key, text) {
+  const body = String(text || '').trim();
+  const node = state.links.nodes[key];
+  if (!body || !node) return null;
+  const m = (await listSessions()).find((s) => s.id === node.tabId && !s.exited);
+  if (!m) throw new Error('a aba do gerente está fechada');
+  if (m.hibernated || PROMPT.has(m.status)) throw new Error('o gerente está num prompt: responda na aba dele');
+  await mx.request('terminal.sendText', { tabId: m.id, text: body, submit: true });
+  const clear = `tell-${key}`;
+  state.ui.clears[clear] = (state.ui.clears[clear] || 0) + 1;
+  schedule();
+  return mx.request('window.showBanner', { text: `enviado para ${bare(m.title)}` }).catch(() => {});
+}
+
+/** Uma conversa sem gerente (cartão "@<tabId>" na visão de todas): só abre a caixa e manda mensagem. */
+async function onFree(verb, key, values) {
+  if (verb === 'write') {
+    state.ui.writing[key] = !state.ui.writing[key];
+    return schedule();
+  }
+  if (verb !== 'message') return null;
+  const body = String((values && values.text) || '').trim();
+  if (!body) return null;
+  const s = (await listSessions()).find((x) => x.id === key.slice(1) && !x.exited);
+  if (!s) throw new Error('essa aba fechou');
+  if (s.hibernated || PROMPT.has(s.status)) throw new Error(`${bare(s.title)} está num prompt: responda na aba`);
+  await mx.request('terminal.sendText', { tabId: s.id, text: body, submit: true });
+  delete state.ui.writing[key];
+  state.ui.clears[key] = (state.ui.clears[key] || 0) + 1;
+  schedule();
+  return mx.request('window.showBanner', { text: `enviado para ${bare(s.title)}` }).catch(() => {});
 }
 
 /** As ações de um cartão; [values] traz o texto de um campo. */
 async function onCard(verb, key, rest, values) {
+  if (String(key).startsWith('@')) return onFree(verb, key, values);
   const node = state.links.nodes[key];
   const card = node && node.card;
   const action = card && card.action;
@@ -262,10 +371,16 @@ async function onCard(verb, key, rest, values) {
   if (verb === 'detail') return openCard(key);
   if (verb === 'notes') return flip(state.ui.open);
   if (verb === 'reject') return flip(state.ui.rejecting);
+  if (verb === 'write') return flip(state.ui.writing);
+  if (verb === 'tell') return tell(key, values && values.text);
   if (verb === 'play') return toggleAudio(key, rest[0], Number(rest[1]));
   if (verb === 'pick') {
     state.ui.picked[key] = Number(rest[0]);
     return schedule();
+  }
+  if (verb === 'message') {
+    const text = String((values && values.text) || '').trim();
+    return text ? answer(key, text, true) : null;
   }
   if (verb === 'answer') {
     const text = String((values && values.text) || '').trim();
@@ -310,11 +425,11 @@ async function retitle(keys) {
   for (const key of keys) {
     const n = state.links.nodes[key];
     const s = n && sessions.find((x) => x.id === n.tabId);
-    if (s) await mx.request('session.rename', { tabId: s.id, title: tinted(s.title, n.color) }).catch((e) => mx.log('rename:', e.message));
+    if (s) await mx.request('session.rename', { tabId: s.id, title: tinted(s.title, n.color, n.manager) }).catch((e) => mx.log('rename:', e.message));
   }
 }
 
-const CARD_VERBS = ['detail', 'notes', 'reject', 'play', 'pick', 'send', 'copy', 'option', 'use', 'approve', 'answer'];
+const CARD_VERBS = ['detail', 'notes', 'reject', 'write', 'tell', 'message', 'play', 'pick', 'send', 'copy', 'option', 'use', 'approve', 'answer'];
 
 async function onAction(act, values) {
   const [verb, a, b, ...more] = act.split(':');
@@ -324,7 +439,8 @@ async function onAction(act, values) {
   const titleOf = async (tabId) => ((await mx.request('sessions.list')) || []).find((s) => s.id === tabId)?.title || tabId;
   if (verb === 'novo') return createManager();
   if (verb === 'focus') return mx.request('session.focus', { tabId: a });
-  if (verb === 'panel') return showPanel(a, true);
+  if (verb === 'panel') return showPanel(a, 'raise');
+  if (verb === 'switch') return showPanel(a, 'switch');
   if (verb === 'older') {
     state.ui.showOld = !state.ui.showOld;
     return schedule();
@@ -364,7 +480,7 @@ async function onAction(act, values) {
 
 mx.onNotification('view.action', ({ viewId, action, values }) => {
   const id = String(viewId);
-  if (id !== 'sidebar' && ![PANEL, CARD, IMAGE].some((p) => id.startsWith(p))) return;
+  if (id !== 'sidebar' && id !== PANEL && ![CARD, IMAGE].some((p) => id.startsWith(p))) return;
   const act = String(action === 'act' ? values && values.a : action || (values && values.action) || '');
   onAction(act, values).catch((e) => {
     mx.log('ação', act, e.message);

@@ -16,12 +16,12 @@ const COLORS = [
 ];
 const BY_ID = new Map(COLORS.map((c) => [c.id, c]));
 const LEGACY = ['🟥', '🟦', '🟩', '🟨', '🟪', '🟧', '🟫', '⬜', '⬛'];
-const PREFIX = new RegExp(`^(${[...COLORS.map((c) => c.mark), ...LEGACY].join('|')})\\s*`, 'u');
+const PREFIX = new RegExp(`^(?:(?:${[...COLORS.map((c) => c.mark), ...LEGACY].join('|')})\\s*)+`, 'u');
 const FORGET_MS = 3 * 24 * 3600 * 1000;
 
 const colorOf = (id) => BY_ID.get(id) || COLORS[0];
 const bare = (name) => String(name || '').replace(PREFIX, '').trim();
-const tinted = (name, colorId) => `${colorOf(colorId).mark} ${bare(name)}`;
+const tinted = (name, colorId, manager = false) => `${colorOf(colorId).mark.repeat(manager ? 2 : 1)} ${bare(name)}`;
 
 class Links {
   constructor(data = {}, now = Date.now) {
@@ -100,6 +100,19 @@ class Links {
       }
     }
     return changed;
+  }
+
+  /** As abas vivas cujo título perdeu a marca da cor (ou a dupla, de gerente). */
+  retitles(sessions) {
+    const live = new Map(sessions.filter((x) => !x.exited).map((x) => [x.id, x]));
+    const out = [];
+    for (const n of Object.values(this.nodes)) {
+      const s = live.get(n.tabId);
+      if (!s || !s.title) continue;
+      const title = tinted(s.title, n.color, n.manager);
+      if (title !== s.title) out.push({ tabId: s.id, title });
+    }
+    return out;
   }
 
   /** Pendura a sessão de [tabId] em [parent] (ou a move pra lá); a subárvore dela passa pra cor do pai. */

@@ -26,13 +26,16 @@ const shownLines = (text) => text.split('\n').reduce((n, l) => n + Math.max(1, M
 
 const plain = (text) => String(text || '').replace(/^#{1,6} +/gm, '').replace(/\*\*|__|`/g, '');
 
-/** A resposta da sessão a uma resposta sua: ela fechou o turno depois que você respondeu pelo cartão. */
+/** A sessão fechou o turno depois do último cartão (ou da sua resposta) e ficou parada: está esperando você. */
 function repliedOf(card, session) {
-  if (!card || !card.answered || !session || session.needsYou || !RESTING.has(session.status)) return null;
+  if (!card || !session || session.needsYou || !RESTING.has(session.status)) return null;
+  if (card.state !== 'working' && !card.answered) return null;
+  const after = Math.max(card.at || 0, (card.answered && card.answered.at) || 0);
   const r = session.reply;
-  return r && r.text && r.at > card.answered.at ? r : null;
+  return r && r.text && r.at > after ? r : null;
 }
 
+/** O estado que vale: a sessão esperando você ganha do que o gerente escreveu. */
 function stateOf(card, session) {
   if (session && session.needsYou) return 'needs_you';
   if (repliedOf(card, session)) return 'needs_you';
@@ -55,7 +58,11 @@ function ago(ms, now) {
 }
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const liveOf = (sessions) => new Map(sessions.filter((s) => !s.exited).map((s) => [s.id, s]));
-const UI = () => ({ picked: {}, rejecting: {}, clears: {}, open: {}, playing: null });
+const ALL = '*';
+const FREE = 0xff8b8b8b;
+const firstLine = (text) => plain(text).split('\n').map((l) => l.trim()).find(Boolean) || '';
+
+const UI = () => ({ picked: {}, rejecting: {}, clears: {}, open: {}, writing: {}, playing: null });
 
 /** Tira o "TASK#123" do começo do título: ele já vai na coluna do número. */
 function split(title, task) {
@@ -116,22 +123,24 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
   const playing = ui.playing && ui.playing.key === key ? ui.playing.id : null;
   const headline =
     (tabAsks && waitOf(session)) ||
-    (replied && 'Respondeu, esperando você.') ||
+    (replied && (c.answered ? 'Respondeu, esperando você.' : 'Parou, esperando você.')) ||
     c.headline ||
     (kind === 'question' || kind === 'approve' ? action.text : '') ||
     (kind === 'command' ? (target ? `Rode na aba ${bare(target.title)}.` : 'Rode este comando.') : '') ||
-    (kind === 'wait' ? waitOf(session) : '');
-  const since = (replied && replied.at) || c.since || c.at || now;
+    (kind === 'wait' ? waitOf(session) : '') ||
+    (!card && session ? firstLine((session.reply && session.reply.text) || (session.activity && session.activity.lastMessage)) : '');
+  const lastTurn = session && session.reply ? session.reply.at : null;
+  const since = (replied && replied.at) || c.since || c.at || lastTurn || now;
   const activity = (session && session.activity) || {};
   return {
     state,
     key,
     task: short(task),
     title,
-    color: hex(colorOf(node.color).hex),
-    age: state === 'needs_you' ? ago(since, now) : state === 'working' ? `desde ${clock(since)}` : clock(c.doneAt || c.at || now),
+    color: node.free ? FREE : hex(colorOf(node.color).hex),
+    age: !card && !lastTurn ? '' : state === 'needs_you' ? ago(since, now) : state === 'working' ? `desde ${clock(since)}` : clock(c.doneAt || c.at || lastTurn || now),
     headline,
-    context: replied ? `Você respondeu: ${c.answered.text}` : c.headline && (kind === 'question' || kind === 'approve') ? action.text : '',
+    context: replied ? (c.answered ? `${c.answered.message ? 'Você escreveu' : 'Você respondeu'}: ${c.answered.text}` : c.headline || '') : c.headline && (kind === 'question' || kind === 'approve') ? action.text : '',
     reply: replied ? plain(replied.text) : '',
     replyLong: Boolean(replied) && shownLines(plain(replied.text)) > REPLY_LINES,
     hasHeadline: Boolean(headline),
@@ -164,6 +173,8 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
     canUse: audible && picked != null && Boolean(options[picked]),
     rejecting: Boolean(ui.rejecting[key]),
     input: `answer-${key}`,
+    canMessage: Boolean(session) && !['question', 'approve', 'reply'].includes(kind),
+    writing: Boolean(ui.writing && ui.writing[key]),
     clear: ui.clears[key] || 0,
     live: state === 'working' ? plain(activity.lastTool || activity.lastMessage).slice(0, 140) : '',
     hasLive: state === 'working' && Boolean(activity.lastTool || activity.lastMessage),
@@ -173,13 +184,15 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
     bullets,
     closed: !session,
     acts: {
-      detail: `detail:${key}`,
+      detail: node.free || String(key).startsWith('@') ? (session ? `focus:${session.id}` : '') : `detail:${key}`,
       notes: `notes:${key}`,
       focus: session ? `focus:${session.id}` : '',
       target: target ? `focus:${target.id}` : '',
       send: `send:${key}`,
       copy: `copy:${key}`,
       answer: `answer:${key}`,
+      write: `write:${key}`,
+      message: `message:${key}`,
       approve: `approve:${key}`,
       reject: `reject:${key}`,
       use: `use:${key}`,
@@ -193,21 +206,52 @@ const seqOf = (key) => Number(String(key).slice(1)) || 0;
 /** Ordem fixa dentro da coluna (a de entrada na árvore), pra um cartão não pular quando você mexe nele. */
 function order(a, b) {
   if (a.state !== b.state) return 0;
+  if (a.rank != null && b.rank != null) return a.rank - b.rank;
   return a.state === 'needs_you' ? seqOf(a.key) - seqOf(b.key) : seqOf(b.key) - seqOf(a.key);
 }
 
-/** Os dados do quadro do gerente [key]. */
+/** Todas as conversas do Claude abertas, ligadas a um gerente ou não, na ordem das abas. */
+function everyone(links, sessions, live, u, now) {
+  const open = sessions
+    .filter((s) => s.kind === 'claude' && !s.exited)
+    .map((s, rank) => {
+      const k = links.byTab(s.id);
+      const managed = k && links.nodes[k].parent;
+      const node = k ? links.nodes[k] : { name: s.title, tabId: s.id, free: true };
+      const card = (managed && node.card) || null;
+      const data = cardData({ key: managed ? k : `@${s.id}`, node: managed ? node : { ...node, free: !k, name: node.name || s.title }, session: s, card }, live, u, now);
+      data.rank = rank;
+      const used = Boolean(s.reply || (s.activity && s.activity.lastPrompt) || !RESTING.has(s.status));
+      data.sinceMs = card ? (card.state === 'done' ? card.doneAt : card.since) || card.at || 0 : (s.reply && s.reply.at) || (used ? now : 1);
+      return data;
+    });
+  const closed = Object.keys(links.nodes)
+    .filter((k) => links.nodes[k].parent && links.nodes[k].card && !live.has(links.nodes[k].tabId))
+    .map((k) => {
+      const card = links.nodes[k].card;
+      const data = cardData({ key: k, node: links.nodes[k], session: null, card }, live, u, now);
+      data.rank = open.length + seqOf(k);
+      data.sinceMs = (card.state === 'done' ? card.doneAt : card.since) || card.at || 0;
+      return data;
+    });
+  return [...open, ...closed];
+}
+
+/** Os dados do quadro do gerente [key], ou de todas as conversas com [ALL]. */
 function board(links, key, sessions, ui = {}, now = Date.now()) {
   const u = { ...UI(), ...ui };
   const live = liveOf(sessions);
-  const manager = links.nodes[key];
-  const all = links.subtree(key).slice(1).map((k) => {
-    const node = links.nodes[k];
-    const card = node.card || null;
-    const data = cardData({ key: k, node, session: live.get(node.tabId) || null, card }, live, u, now);
-    data.sinceMs = (card && (card.state === 'done' ? card.doneAt : card.since)) || (card && card.at) || 0;
-    return data;
-  });
+  const whole = key === ALL;
+  const manager = whole ? { name: 'todas as sessões', color: null, tabId: null } : links.nodes[key];
+  const all = whole
+    ? everyone(links, sessions, live, u, now)
+    : links.subtree(key).slice(1).map((k) => {
+        const node = links.nodes[k];
+        const card = node.card || null;
+        const data = cardData({ key: k, node, session: live.get(node.tabId) || null, card }, live, u, now);
+        data.sinceMs = (card && (card.state === 'done' ? card.doneAt : card.since)) || (card && card.at) || 0;
+        return data;
+      });
   const old = all.filter((c) => c.state === 'done' && c.sinceMs && !sameDay(c.sinceMs, now));
   const cards = all.filter((c) => u.showOld || !old.includes(c)).sort(order);
   const me = live.get(manager.tabId);
@@ -217,8 +261,10 @@ function board(links, key, sessions, ui = {}, now = Date.now()) {
     name,
     folder: folder === name ? '' : folder,
     total: `${all.length} ${all.length === 1 ? 'sessão' : 'sessões'}`,
-    color: hex(colorOf(manager.color).hex),
+    color: whole ? FREE : hex(colorOf(manager.color).hex),
     managerTab: me ? `focus:${me.id}` : '',
+    tell: { input: `tell-${key}`, act: `tell:${key}`, clear: u.clears[`tell-${key}`] || 0 },
+    canTell: Boolean(me),
     cols: COLUMNS.map((col) => {
       const list = cards.filter((c) => c.state === col.state);
       return { ...col, count: String(list.length), cards: list, isEmpty: list.length === 0 };
@@ -257,9 +303,28 @@ function detail(links, key, sessions, ui = {}, now = Date.now()) {
 }
 
 /** A janela do gerente [key]: título, a biblioteca rfw e os dados. */
+/** Os gerentes que o painel alterna, com quantas sessões de cada um esperam você. */
+const managerKeys = (links) => links.roots().filter((k) => links.nodes[k].manager || links.children(k).length);
+
+function managers(links, sessions, current) {
+  const live = liveOf(sessions);
+  const waitingAll = everyone(links, sessions, live, UI(), Date.now()).filter((c) => c.state === 'needs_you').length;
+  const all = { name: 'todas', color: FREE, act: `switch:${ALL}`, active: current === ALL, waiting: waitingAll ? String(waitingAll) : '' };
+  return [all, ...managerKeys(links)
+    .map((k) => {
+      const waiting = links
+        .subtree(k)
+        .slice(1)
+        .filter((c) => stateOf(links.nodes[c].card || null, live.get(links.nodes[c].tabId) || null) === 'needs_you').length;
+      return { name: bare(links.nodes[k].name), color: hex(colorOf(links.nodes[k].color).hex), act: `switch:${k}`, active: k === current, waiting: waiting ? String(waiting) : '' };
+    })];
+}
+
 function panel(links, key, sessions, library, ui, now) {
   const data = board(links, key, sessions, ui, now);
+  data.managers = managers(links, sessions, key);
+  data.hasSwitch = data.managers.length > 1;
   return { title: `painel · ${data.name}`, rfw: { library, root: 'root' }, data };
 }
 
-module.exports = { panel, board, detail, cardData, liveOf, stateOf, taskOf, STATES, MAX_BULLETS, PROMPT, RESTING, waitOf, repliedOf, plain };
+module.exports = { ALL, panel, managers, managerKeys, board, detail, cardData, liveOf, stateOf, taskOf, STATES, MAX_BULLETS, PROMPT, RESTING, waitOf, repliedOf, plain };

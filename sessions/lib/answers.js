@@ -6,8 +6,8 @@ const { PROMPT } = require('./cards');
 
 const INBOX = 50;
 
-/** Manda [text] pela sessão do nó [key] e passa o cartão pra "trabalhando". Devolve por onde foi. */
-async function deliver(key, text, { links, request, sessions, now = Date.now() }) {
+/** Manda [text] pela sessão do nó [key] e passa o cartão pra "trabalhando"; uma [message] avulsa mantém o pedido do cartão. Devolve por onde foi. */
+async function deliver(key, text, { links, request, sessions, now = Date.now(), message = false }) {
   const node = links.nodes[key];
   if (!node) throw new Error('esse cartão não existe mais');
   const body = String(text || '').trim();
@@ -25,7 +25,11 @@ async function deliver(key, text, { links, request, sessions, now = Date.now() }
     await request('terminal.sendText', { tabId: s.id, text: body, submit: true });
     if (parent) parent.inbox = [...(parent.inbox || []), { tabId: s.id, title, text: body, at: now, via: 'terminal' }].slice(-INBOX);
   }
-  node.card = { ...(node.card || {}), state: 'working', action: null, headline: `Você respondeu: ${body}`, since: now, answered: { text: body, at: now } };
+  if (message) {
+    const was = node.card || {};
+    const back = !was.state || was.state === 'done' ? { state: 'working', since: now, doneAt: null } : {};
+    node.card = { ...was, ...back, answered: { text: body, at: now, message: true } };
+  } else node.card = { ...(node.card || {}), state: 'working', action: null, headline: `Você respondeu: ${body}`, since: now, answered: { text: body, at: now } };
   return { via: toManager ? 'manager' : 'terminal', title };
 }
 
