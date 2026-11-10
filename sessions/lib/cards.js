@@ -18,8 +18,24 @@ const taskOf = (s) => {
 };
 
 /** O estado que vale: a sessão esperando você ganha do que o gerente escreveu. */
+const RESTING = new Set(['ready', 'idle']);
+
+const REPLY_LINES = 8;
+const LINE_CHARS = 40;
+const shownLines = (text) => text.split('\n').reduce((n, l) => n + Math.max(1, Math.ceil(l.length / LINE_CHARS)), 0);
+
+const plain = (text) => String(text || '').replace(/^#{1,6} +/gm, '').replace(/\*\*|__|`/g, '');
+
+/** A resposta da sessão a uma resposta sua: ela fechou o turno depois que você respondeu pelo cartão. */
+function repliedOf(card, session) {
+  if (!card || !card.answered || !session || session.needsYou || !RESTING.has(session.status)) return null;
+  const r = session.reply;
+  return r && r.text && r.at > card.answered.at ? r : null;
+}
+
 function stateOf(card, session) {
   if (session && session.needsYou) return 'needs_you';
+  if (repliedOf(card, session)) return 'needs_you';
   if (card && card.state) return card.state;
   if (!session) return 'done';
   return session.status === 'idle' || session.status === 'ready' ? 'done' : 'working';
@@ -90,19 +106,22 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
   const target = action && action.tabId ? live.get(action.tabId) : null;
   const prompt = Boolean(session && PROMPT.has(session.status));
   const tabAsks = Boolean(session && session.needsYou) && c.state !== 'needs_you';
+  const replied = repliedOf(c, session);
   let kind = action && !tabAsks ? action.kind : 'none';
   if (tabAsks || (state === 'needs_you' && !action)) kind = 'wait';
+  if (replied) kind = 'reply';
   const options = action && action.options && !tabAsks ? action.options : [];
   const audible = options.some((o) => o.audio);
   const picked = ui.picked[key];
   const playing = ui.playing && ui.playing.key === key ? ui.playing.id : null;
   const headline =
     (tabAsks && waitOf(session)) ||
+    (replied && 'Respondeu, esperando você.') ||
     c.headline ||
     (kind === 'question' || kind === 'approve' ? action.text : '') ||
     (kind === 'command' ? (target ? `Rode na aba ${bare(target.title)}.` : 'Rode este comando.') : '') ||
     (kind === 'wait' ? waitOf(session) : '');
-  const since = c.since || c.at || now;
+  const since = (replied && replied.at) || c.since || c.at || now;
   const activity = (session && session.activity) || {};
   return {
     state,
@@ -112,7 +131,9 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
     color: hex(colorOf(node.color).hex),
     age: state === 'needs_you' ? ago(since, now) : state === 'working' ? `desde ${clock(since)}` : clock(c.doneAt || c.at || now),
     headline,
-    context: c.headline && (kind === 'question' || kind === 'approve') ? action.text : '',
+    context: replied ? `Você respondeu: ${c.answered.text}` : c.headline && (kind === 'question' || kind === 'approve') ? action.text : '',
+    reply: replied ? plain(replied.text) : '',
+    replyLong: Boolean(replied) && shownLines(plain(replied.text)) > REPLY_LINES,
     hasHeadline: Boolean(headline),
     kind,
     command: kind === 'command' ? shown(action.text) : '',
@@ -142,9 +163,9 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
     useLabel: audible && picked != null && options[picked] ? `Usar ${options[picked].label}` : '',
     canUse: audible && picked != null && Boolean(options[picked]),
     rejecting: Boolean(ui.rejecting[key]),
-    input: kind === 'question' || kind === 'approve' ? `answer-${key}` : '',
+    input: `answer-${key}`,
     clear: ui.clears[key] || 0,
-    live: state === 'working' ? String(activity.lastTool || activity.lastMessage || '').slice(0, 140) : '',
+    live: state === 'working' ? plain(activity.lastTool || activity.lastMessage).slice(0, 140) : '',
     hasLive: state === 'working' && Boolean(activity.lastTool || activity.lastMessage),
     notes: bullets.length ? `${bullets.length} ${bullets.length === 1 ? 'nota' : 'notas'} da sessão` : '',
     hasNotes: bullets.length > 0,
@@ -167,10 +188,12 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
   };
 }
 
+const seqOf = (key) => Number(String(key).slice(1)) || 0;
+
+/** Ordem fixa dentro da coluna (a de entrada na árvore), pra um cartão não pular quando você mexe nele. */
 function order(a, b) {
   if (a.state !== b.state) return 0;
-  if (a.state === 'needs_you') return a.sinceMs - b.sinceMs;
-  return b.sinceMs - a.sinceMs;
+  return a.state === 'needs_you' ? seqOf(a.key) - seqOf(b.key) : seqOf(b.key) - seqOf(a.key);
 }
 
 /** Os dados do quadro do gerente [key]. */
@@ -239,4 +262,4 @@ function panel(links, key, sessions, library, ui, now) {
   return { title: `painel · ${data.name}`, rfw: { library, root: 'root' }, data };
 }
 
-module.exports = { panel, board, detail, cardData, liveOf, stateOf, taskOf, STATES, MAX_BULLETS, PROMPT, waitOf };
+module.exports = { panel, board, detail, cardData, liveOf, stateOf, taskOf, STATES, MAX_BULLETS, PROMPT, RESTING, waitOf, repliedOf, plain };

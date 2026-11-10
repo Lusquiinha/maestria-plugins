@@ -8,8 +8,9 @@ const mx = require('./maestria');
 const tools = require('./lib/tools');
 const { Links, tinted, bare } = require('./lib/links');
 const { sidebar } = require('./lib/tree');
-const { panel, detail } = require('./lib/cards');
+const { panel, detail, RESTING } = require('./lib/cards');
 const { deliver } = require('./lib/answers');
+const { replies } = require('./lib/replies');
 
 const MANAGER_BRIEF = [
   'Você é um gerente de sessões na Maestria. Divida o trabalho e delegue: abra uma sessão por frente com sessions_open',
@@ -28,6 +29,7 @@ const state = {
   modal: null,
   live: {},
   ui: { picked: {}, rejecting: {}, clears: {}, open: {}, unfolded: {}, showOld: false, playing: null },
+  titles: new Map(),
 };
 const PANEL = 'painel:';
 const CARD = 'cartao:';
@@ -46,7 +48,15 @@ function liveLine(payload) {
 
 const withLive = (sessions) =>
   sessions.map((s) => (state.live[s.id] ? { ...s, activity: { ...(s.activity || {}), lastTool: state.live[s.id] } } : s));
-const listSessions = async () => withLive((await mx.request('sessions.list')) || []);
+const readReply = replies(os.homedir());
+
+/** Junta a última resposta do Claude às sessões que você respondeu pelo cartão e que já fecharam o turno. */
+function withReplies(sessions) {
+  const answered = new Set(Object.values(state.links.nodes).filter((n) => n.card && n.card.answered).map((n) => n.tabId));
+  return sessions.map((s) => (answered.has(s.id) && s.sessionId && !s.needsYou && RESTING.has(s.status) ? { ...s, reply: readReply(s.sessionId, s.cwd) } : s));
+}
+
+const listSessions = async () => withReplies(withLive((await mx.request('sessions.list')) || []));
 
 const isDir = (p) => {
   try {
@@ -92,8 +102,11 @@ async function refresh() {
       state.panels.delete(key);
       continue;
     }
-    const r = await mx.request('view.update', { viewId: PANEL + key, ...panel(state.links, key, sessions, LIBRARY, state.ui) }).catch(() => ({ open: false }));
-    if (!r || r.open === false) state.panels.delete(key);
+    const r = await mx.request('view.update', panelUpdate(key, sessions)).catch(() => ({ open: false }));
+    if (!r || r.open === false) {
+      state.panels.delete(key);
+      state.titles.delete(key);
+    }
   }
   if (state.modal) {
     const d = detail(state.links, state.modal, sessions, state.ui);
@@ -102,11 +115,22 @@ async function refresh() {
   }
 }
 
+/** O template só vai na primeira vez por processo: reenviá-lo reconstrói a janela e zera a rolagem. */
+function panelUpdate(key, sessions) {
+  const p = panel(state.links, key, sessions, LIBRARY, state.ui);
+  const was = state.titles.get(key);
+  state.titles.set(key, p.title);
+  if (was === undefined) return { viewId: PANEL + key, ...p };
+  return { viewId: PANEL + key, data: p.data, ...(p.title !== was ? { title: p.title } : {}) };
+}
+
 /** Abre (ou traz pra tela) a janela de cartões do gerente [key]. */
 async function showPanel(key, focus = false) {
   if (state.panels.has(key) && !focus) return schedule();
   const sessions = await listSessions();
-  await mx.request('view.open', { viewId: PANEL + key, ...panel(state.links, key, sessions, LIBRARY, state.ui) });
+  const p = panel(state.links, key, sessions, LIBRARY, state.ui);
+  await mx.request('view.open', { viewId: PANEL + key, ...p });
+  state.titles.set(key, p.title);
   state.panels.add(key);
 }
 
@@ -243,6 +267,11 @@ async function onCard(verb, key, rest, values) {
     state.ui.picked[key] = Number(rest[0]);
     return schedule();
   }
+  if (verb === 'answer') {
+    const text = String((values && values.text) || '').trim();
+    if (!text) return null;
+    return answer(key, state.ui.rejecting[key] ? `Rejeitado: ${text}` : text);
+  }
   if (!action) return null;
   if (verb === 'send' && action.kind === 'command' && action.tabId) {
     await mx.request('terminal.sendText', { tabId: action.tabId, text: action.text, submit: false });
@@ -256,11 +285,6 @@ async function onCard(verb, key, rest, values) {
   if (verb === 'option') return option(Number(rest[0])) ? answer(key, option(Number(rest[0]))) : null;
   if (verb === 'use') return state.ui.picked[key] != null && option(state.ui.picked[key]) ? answer(key, option(state.ui.picked[key])) : null;
   if (verb === 'approve') return answer(key, 'Aprovado.');
-  if (verb === 'answer') {
-    const text = String((values && values.text) || '').trim();
-    if (!text) return null;
-    return answer(key, state.ui.rejecting[key] ? `Rejeitado: ${text}` : text);
-  }
   return null;
 }
 
