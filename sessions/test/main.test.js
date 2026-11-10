@@ -147,12 +147,32 @@ test('um painel só: trocar de gerente atualiza o mesmo painel, e o cartão de o
     assert.ok(mine.length > 0 && mine.every(([m]) => m === 'view.update'));
     assert.equal(shown(), 'h');
     const chips = mine.pop()[1].data.managers;
-    assert.deepEqual(chips.map((m) => [m.name, m.active, m.act]), [['g', false, `switch:${keyOf('g')}`], ['h', true, `switch:${keyOf('h')}`]]);
+    assert.deepEqual(chips.map((m) => [m.name, m.active, m.act]), [['todas', false, 'switch:*'], ['g', false, `switch:${keyOf('g')}`], ['h', true, `switch:${keyOf('h')}`]]);
     const raised = calls.length;
     handlers.note['view.action']({ viewId: 'sidebar', action: `panel:${keyOf('g')}` });
     await new Promise((r) => setTimeout(r, 400));
     assert.ok(calls.slice(raised).some(([m, p]) => m === 'view.open' && p.viewId === 'painel'));
     assert.equal(shown(), 'g');
+  } finally {
+    sessions.splice(2);
+  }
+});
+
+test('o painel abre em todas as conversas e manda mensagem a uma sem gerente', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sessions-main-'));
+  handlers.req.initialize({ dataDir });
+  sessions.push({ id: 'solta', kind: 'claude', title: 'solta', status: 'tool' });
+  try {
+    handlers.note['view.action']({ viewId: 'painel', action: 'act', values: { a: 'switch:*' } });
+    await new Promise((r) => setTimeout(r, 400));
+    const last = calls.filter(([m, p]) => (m === 'view.open' || m === 'view.update') && p.viewId === 'painel' && p.data).pop()[1].data;
+    assert.equal(last.name, 'todas as sessões');
+    const titles = last.cols.flatMap((c) => c.cards).map((c) => c.title);
+    assert.ok(titles.includes('solta'));
+    const before = calls.length;
+    handlers.note['view.action']({ viewId: 'painel', action: 'act', values: { a: 'message:@solta', text: 'oi' } });
+    await tick();
+    assert.deepEqual(calls.slice(before).filter(([m]) => m === 'terminal.sendText').map(([, p]) => [p.tabId, p.text]), [['solta', 'oi']]);
   } finally {
     sessions.splice(2);
   }

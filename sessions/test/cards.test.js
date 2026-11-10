@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Links } = require('../lib/links');
-const { board, detail, panel, stateOf, taskOf } = require('../lib/cards');
+const { ALL, board, detail, managers, panel, stateOf, taskOf } = require('../lib/cards');
 
 const NOW = Date.parse('2026-11-09T12:00:00');
 const min = (m) => NOW - m * 60000;
@@ -270,4 +270,46 @@ test('todo cartão com sessão viva tem caixa de mensagem; o feito só abre a ca
   assert.equal(all.w.acts.write, `write:${w}`);
   assert.deepEqual([b.canTell, b.tell.input, b.tell.act], [true, `tell-${g}`, `tell:${g}`]);
   assert.equal(board(l, g, sessions.slice(1), {}, NOW).canTell, false);
+});
+
+test('todas: cada conversa do Claude aberta, com ou sem gerente, classificada; terminal e aba fechada ficam de fora', () => {
+  const { l, g, kid } = setup();
+  kid('w', { state: 'working', headline: 'rodando', at: NOW });
+  const sessions = [
+    { id: 'g', kind: 'claude', title: 'g', status: 'idle', reply: { text: 'coordenando', at: NOW } },
+    { id: 'w', kind: 'claude', title: 'w', status: 'tool' },
+    { id: 'p', kind: 'claude', title: 'pergunta', status: 'waitingAnswer', needsYou: true },
+    { id: 'f', kind: 'claude', title: 'feita', status: 'idle', reply: { text: '## Pronto\nPR aberto', at: NOW } },
+    { id: 'v', kind: 'claude', title: 'vazia', status: 'ready' },
+    { id: 'sh', kind: 'shell', title: 'zsh', status: 'unknown' },
+    { id: 'x', kind: 'claude', title: 'fechada', status: 'idle', exited: true },
+  ];
+  const b = board(l, ALL, sessions, {}, NOW);
+  const c = cols(b);
+  assert.deepEqual(c.needs_you.map((x) => x.title), ['pergunta']);
+  assert.deepEqual(c.working.map((x) => x.title), ['w']);
+  assert.deepEqual(c.done.map((x) => x.title), ['g', 'feita']);
+  assert.equal(b.older, 'ontem e antes · 1');
+  const feita = c.done.find((x) => x.title === 'feita');
+  assert.deepEqual([feita.key, feita.headline, feita.color, feita.acts.detail, feita.canMessage], ['@f', 'Pronto', 0xff8b8b8b, 'focus:f', true]);
+  assert.deepEqual([b.name, b.canTell, b.managerTab], ['todas as sessões', false, '']);
+  const chips = managers(l, sessions, ALL);
+  assert.deepEqual(chips.map((m) => [m.name, m.active, m.waiting]), [['todas', true, '1'], ['gerente', false, '']]);
+  assert.equal(panel(l, ALL, sessions, 'lib', {}, NOW).data.hasSwitch, true);
+});
+
+test('todas: o gerente vira conversa direta (sem cartão), o cartão de aba fechada aparece, aba nunca usada dobra', () => {
+  const { l, g, kid } = setup();
+  kid('gone', { state: 'needs_you', headline: 'aprova o deploy?', at: NOW });
+  const sessions = [
+    { id: 'g', kind: 'claude', title: 'g', status: 'tool' },
+    { id: 'nova', kind: 'claude', title: 'nova', status: 'ready' },
+    { id: 'usada', kind: 'claude', title: 'usada', status: 'idle', activity: { lastPrompt: 'faz x' } },
+  ];
+  const c = cols(board(l, ALL, sessions, {}, NOW));
+  const gc = c.working.find((x) => x.title === 'g');
+  assert.deepEqual([gc.key, gc.acts.detail, gc.acts.message, gc.color === 0xff8b8b8b], ['@g', 'focus:g', 'message:@g', false]);
+  assert.deepEqual(c.needs_you.map((x) => [x.title, x.closed]), [['gone', true]]);
+  assert.deepEqual(c.done.map((x) => [x.title, x.age]), [['usada', '']]);
+  assert.equal(managers(l, sessions, ALL)[0].waiting, '1');
 });

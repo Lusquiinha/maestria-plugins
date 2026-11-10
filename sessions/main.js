@@ -8,7 +8,7 @@ const mx = require('./maestria');
 const tools = require('./lib/tools');
 const { Links, tinted, bare } = require('./lib/links');
 const { sidebar } = require('./lib/tree');
-const { panel, detail, managerKeys, RESTING, PROMPT } = require('./lib/cards');
+const { ALL, panel, detail, managerKeys, RESTING, PROMPT } = require('./lib/cards');
 const { deliver } = require('./lib/answers');
 const { replies } = require('./lib/replies');
 
@@ -24,7 +24,7 @@ const state = {
   file: null,
   dataDir: null,
   timer: null,
-  current: null,
+  current: ALL,
   open: false,
   showing: Promise.resolve(),
   probed: false,
@@ -54,10 +54,9 @@ const withLive = (sessions) =>
   sessions.map((s) => (state.live[s.id] ? { ...s, activity: { ...(s.activity || {}), lastTool: state.live[s.id] } } : s));
 const readReply = replies(os.homedir());
 
-/** Junta a última resposta do Claude às sessões que você respondeu pelo cartão e que já fecharam o turno. */
+/** Junta a última resposta do Claude às conversas paradas (o cartão compara com ela, e a visão de todas a mostra). */
 function withReplies(sessions) {
-  const answered = new Set(Object.values(state.links.nodes).filter((n) => n.card && n.card.answered).map((n) => n.tabId));
-  return sessions.map((s) => (answered.has(s.id) && s.sessionId && !s.needsYou && RESTING.has(s.status) ? { ...s, reply: readReply(s.sessionId, s.cwd) } : s));
+  return sessions.map((s) => (s.kind === 'claude' && s.sessionId && !s.needsYou && RESTING.has(s.status) ? { ...s, reply: readReply(s.sessionId, s.cwd) } : s));
 }
 
 const listSessions = async () => withReplies(withLive((await mx.request('sessions.list')) || []));
@@ -111,15 +110,10 @@ async function refresh() {
     state.probed = true;
     await adopt(sessions);
   }
-  if (!managerKeys(state.links).includes(state.current)) {
-    state.current = managerKeys(state.links)[0] || null;
-    if (!state.current && state.open) {
-      state.open = false;
-      state.title = undefined;
-      await mx.request('view.close', { viewId: PANEL }).catch(() => {});
-    }
-  }
-  if (state.open && state.current) {
+  if (state.current !== ALL && !managerKeys(state.links).includes(state.current)) state.current = ALL;
+  const liveTabs = new Set(sessions.filter((s) => !s.exited).map((s) => `@${s.id}`));
+  for (const bag of [state.ui.writing, state.ui.clears]) for (const k of Object.keys(bag)) if (k.startsWith('@') && !liveTabs.has(k)) delete bag[k];
+  if (state.open) {
     const r = await mx.request('view.update', panelUpdate(sessions)).catch(() => ({ open: false }));
     if (!r || r.open === false) {
       state.open = false;
@@ -145,18 +139,16 @@ function panelUpdate(sessions) {
 /** Na subida: o painel único que ficou aberto continua; na primeira vez, os de antes (um por gerente) viram ele. */
 async function adopt(sessions) {
   const keys = managerKeys(state.links);
-  if (!keys.includes(state.current)) state.current = keys[0] || null;
-  if (state.current) {
-    const r = await mx.request('view.update', panelUpdate(sessions)).catch(() => ({ open: false }));
-    state.open = Boolean(r && r.open !== false);
-    if (!state.open) state.title = undefined;
-  }
+  if (state.current !== ALL && !keys.includes(state.current)) state.current = ALL;
+  const r = await mx.request('view.update', panelUpdate(sessions)).catch(() => ({ open: false }));
+  state.open = Boolean(r && r.open !== false);
+  if (!state.open) state.title = undefined;
   const mark = state.dataDir && path.join(state.dataDir, 'painel-unico');
   if (!mark || fs.existsSync(mark)) return;
   try {
     fs.writeFileSync(mark, '');
   } catch {}
-  for (const key of [state.current, ...keys.filter((k) => k !== state.current)].filter(Boolean)) {
+  for (const key of [state.current, ...keys.filter((k) => k !== state.current)].filter((k) => k && k !== ALL)) {
     const p = panel(state.links, key, sessions, LIBRARY, state.ui);
     const r = await mx.request('view.update', { viewId: LEGACY_PANEL + key, ...p }).catch(() => ({ open: false }));
     if (!r || r.open === false) continue;
@@ -176,7 +168,7 @@ function showPanel(key, how = 'card') {
 }
 
 async function showPanelNow(key, how) {
-  if (!state.links.nodes[key]) return null;
+  if (key !== ALL && !state.links.nodes[key]) return null;
   const sessions = await listSessions();
   if (state.open) {
     if (how !== 'card') state.current = key;
@@ -185,9 +177,10 @@ async function showPanelNow(key, how) {
     if (!r || r.open === false) state.open = false;
   }
   if (state.open && how === 'card') return null;
-  state.current = key;
+  if (how !== 'card') state.current = key;
+  else if (state.current !== key) state.current = ALL;
   state.open = true;
-  const p = panel(state.links, key, sessions, LIBRARY, state.ui);
+  const p = panel(state.links, state.current, sessions, LIBRARY, state.ui);
   state.title = p.title;
   await mx.request('view.open', { viewId: PANEL, ...p }).catch((e) => {
     state.open = false;
@@ -346,8 +339,28 @@ async function tell(key, text) {
   return mx.request('window.showBanner', { text: `enviado para ${bare(m.title)}` }).catch(() => {});
 }
 
+/** Uma conversa sem gerente (cartão "@<tabId>" na visão de todas): só abre a caixa e manda mensagem. */
+async function onFree(verb, key, values) {
+  if (verb === 'write') {
+    state.ui.writing[key] = !state.ui.writing[key];
+    return schedule();
+  }
+  if (verb !== 'message') return null;
+  const body = String((values && values.text) || '').trim();
+  if (!body) return null;
+  const s = (await listSessions()).find((x) => x.id === key.slice(1) && !x.exited);
+  if (!s) throw new Error('essa aba fechou');
+  if (s.hibernated || PROMPT.has(s.status)) throw new Error(`${bare(s.title)} está num prompt: responda na aba`);
+  await mx.request('terminal.sendText', { tabId: s.id, text: body, submit: true });
+  delete state.ui.writing[key];
+  state.ui.clears[key] = (state.ui.clears[key] || 0) + 1;
+  schedule();
+  return mx.request('window.showBanner', { text: `enviado para ${bare(s.title)}` }).catch(() => {});
+}
+
 /** As ações de um cartão; [values] traz o texto de um campo. */
 async function onCard(verb, key, rest, values) {
+  if (String(key).startsWith('@')) return onFree(verb, key, values);
   const node = state.links.nodes[key];
   const card = node && node.card;
   const action = card && card.action;
