@@ -8,7 +8,7 @@ const mx = require('./maestria');
 const tools = require('./lib/tools');
 const { Links, tinted, bare } = require('./lib/links');
 const { sidebar } = require('./lib/tree');
-const { panel, detail, RESTING, PROMPT } = require('./lib/cards');
+const { panel, detail, managerKeys, RESTING, PROMPT } = require('./lib/cards');
 const { deliver } = require('./lib/answers');
 const { replies } = require('./lib/replies');
 
@@ -24,15 +24,18 @@ const state = {
   file: null,
   dataDir: null,
   timer: null,
-  panels: new Set(),
+  current: null,
+  open: false,
+  showing: Promise.resolve(),
   probed: false,
   modal: null,
   live: {},
   ui: { picked: {}, rejecting: {}, clears: {}, open: {}, writing: {}, unfolded: {}, showOld: false, playing: null },
-  titles: new Map(),
+  title: undefined,
   retitled: new Map(),
 };
-const PANEL = 'painel:';
+const PANEL = 'painel';
+const LEGACY_PANEL = 'painel:';
 const CARD = 'cartao:';
 const IMAGE = 'imagem:';
 const LIBRARY = fs.readFileSync(path.join(__dirname, 'ui', 'panel.rfwtxt'), 'utf8');
@@ -106,17 +109,21 @@ async function refresh() {
   await mx.request('sidebar.update', sidebar(state.links, sessions, state.ui));
   if (!state.probed) {
     state.probed = true;
-    for (const key of state.links.roots()) state.panels.add(key);
+    await adopt(sessions);
   }
-  for (const key of [...state.panels]) {
-    if (!state.links.nodes[key]) {
-      state.panels.delete(key);
-      continue;
+  if (!managerKeys(state.links).includes(state.current)) {
+    state.current = managerKeys(state.links)[0] || null;
+    if (!state.current && state.open) {
+      state.open = false;
+      state.title = undefined;
+      await mx.request('view.close', { viewId: PANEL }).catch(() => {});
     }
-    const r = await mx.request('view.update', panelUpdate(key, sessions)).catch(() => ({ open: false }));
+  }
+  if (state.open && state.current) {
+    const r = await mx.request('view.update', panelUpdate(sessions)).catch(() => ({ open: false }));
     if (!r || r.open === false) {
-      state.panels.delete(key);
-      state.titles.delete(key);
+      state.open = false;
+      state.title = undefined;
     }
   }
   if (state.modal) {
@@ -127,22 +134,67 @@ async function refresh() {
 }
 
 /** O template só vai na primeira vez por processo: reenviá-lo reconstrói a janela e zera a rolagem. */
-function panelUpdate(key, sessions) {
-  const p = panel(state.links, key, sessions, LIBRARY, state.ui);
-  const was = state.titles.get(key);
-  state.titles.set(key, p.title);
-  if (was === undefined) return { viewId: PANEL + key, ...p };
-  return { viewId: PANEL + key, data: p.data, ...(p.title !== was ? { title: p.title } : {}) };
+function panelUpdate(sessions) {
+  const p = panel(state.links, state.current, sessions, LIBRARY, state.ui);
+  const was = state.title;
+  state.title = p.title;
+  if (was === undefined) return { viewId: PANEL, ...p };
+  return { viewId: PANEL, data: p.data, ...(p.title !== was ? { title: p.title } : {}) };
 }
 
-/** Abre (ou traz pra tela) a janela de cartões do gerente [key]. */
-async function showPanel(key, focus = false) {
-  if (state.panels.has(key) && !focus) return schedule();
+/** Na subida: o painel único que ficou aberto continua; na primeira vez, os de antes (um por gerente) viram ele. */
+async function adopt(sessions) {
+  const keys = managerKeys(state.links);
+  if (!keys.includes(state.current)) state.current = keys[0] || null;
+  if (state.current) {
+    const r = await mx.request('view.update', panelUpdate(sessions)).catch(() => ({ open: false }));
+    state.open = Boolean(r && r.open !== false);
+    if (!state.open) state.title = undefined;
+  }
+  const mark = state.dataDir && path.join(state.dataDir, 'painel-unico');
+  if (!mark || fs.existsSync(mark)) return;
+  try {
+    fs.writeFileSync(mark, '');
+  } catch {}
+  for (const key of [state.current, ...keys.filter((k) => k !== state.current)].filter(Boolean)) {
+    const p = panel(state.links, key, sessions, LIBRARY, state.ui);
+    const r = await mx.request('view.update', { viewId: LEGACY_PANEL + key, ...p }).catch(() => ({ open: false }));
+    if (!r || r.open === false) continue;
+    await mx.request('view.close', { viewId: LEGACY_PANEL + key }).catch(() => {});
+    if (!state.open) await showPanel(key, 'raise');
+  }
+}
+
+/**
+ * Mostra o gerente [key] no painel único. [how]: 'card' (um cartão novo: não tira o painel de quem você olha),
+ * 'switch' (um chip do painel: troca no lugar) ou 'raise' (a lateral: troca e traz o painel pra frente).
+ */
+function showPanel(key, how = 'card') {
+  const run = state.showing.then(() => showPanelNow(key, how));
+  state.showing = run.catch(() => {});
+  return run;
+}
+
+async function showPanelNow(key, how) {
+  if (!state.links.nodes[key]) return null;
   const sessions = await listSessions();
+  if (state.open) {
+    if (how !== 'card') state.current = key;
+    const r = await mx.request('view.update', panelUpdate(sessions)).catch(() => ({ open: false }));
+    if (r && r.open !== false && how !== 'raise') return null;
+    if (!r || r.open === false) state.open = false;
+  }
+  if (state.open && how === 'card') return null;
+  state.current = key;
+  state.open = true;
   const p = panel(state.links, key, sessions, LIBRARY, state.ui);
-  await mx.request('view.open', { viewId: PANEL + key, ...p });
-  state.titles.set(key, p.title);
-  state.panels.add(key);
+  state.title = p.title;
+  await mx.request('view.open', { viewId: PANEL, ...p }).catch((e) => {
+    state.open = false;
+    state.title = undefined;
+    throw e;
+  });
+  return null;
 }
 
 function schedule() {
@@ -374,7 +426,8 @@ async function onAction(act, values) {
   const titleOf = async (tabId) => ((await mx.request('sessions.list')) || []).find((s) => s.id === tabId)?.title || tabId;
   if (verb === 'novo') return createManager();
   if (verb === 'focus') return mx.request('session.focus', { tabId: a });
-  if (verb === 'panel') return showPanel(a, true);
+  if (verb === 'panel') return showPanel(a, 'raise');
+  if (verb === 'switch') return showPanel(a, 'switch');
   if (verb === 'older') {
     state.ui.showOld = !state.ui.showOld;
     return schedule();
@@ -414,7 +467,7 @@ async function onAction(act, values) {
 
 mx.onNotification('view.action', ({ viewId, action, values }) => {
   const id = String(viewId);
-  if (id !== 'sidebar' && ![PANEL, CARD, IMAGE].some((p) => id.startsWith(p))) return;
+  if (id !== 'sidebar' && id !== PANEL && ![CARD, IMAGE].some((p) => id.startsWith(p))) return;
   const act = String(action === 'act' ? values && values.a : action || (values && values.action) || '');
   onAction(act, values).catch((e) => {
     mx.log('ação', act, e.message);

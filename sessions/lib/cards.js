@@ -266,9 +266,26 @@ function detail(links, key, sessions, ui = {}, now = Date.now()) {
 }
 
 /** A janela do gerente [key]: título, a biblioteca rfw e os dados. */
+/** Os gerentes que o painel alterna, com quantas sessões de cada um esperam você. */
+const managerKeys = (links) => links.roots().filter((k) => links.nodes[k].manager || links.children(k).length);
+
+function managers(links, sessions, current) {
+  const live = liveOf(sessions);
+  return managerKeys(links)
+    .map((k) => {
+      const waiting = links
+        .subtree(k)
+        .slice(1)
+        .filter((c) => stateOf(links.nodes[c].card || null, live.get(links.nodes[c].tabId) || null) === 'needs_you').length;
+      return { name: bare(links.nodes[k].name), color: hex(colorOf(links.nodes[k].color).hex), act: `switch:${k}`, active: k === current, waiting: waiting ? String(waiting) : '' };
+    });
+}
+
 function panel(links, key, sessions, library, ui, now) {
   const data = board(links, key, sessions, ui, now);
+  data.managers = managers(links, sessions, key);
+  data.hasSwitch = data.managers.length > 1;
   return { title: `painel · ${data.name}`, rfw: { library, root: 'root' }, data };
 }
 
-module.exports = { panel, board, detail, cardData, liveOf, stateOf, taskOf, STATES, MAX_BULLETS, PROMPT, RESTING, waitOf, repliedOf, plain };
+module.exports = { panel, managers, managerKeys, board, detail, cardData, liveOf, stateOf, taskOf, STATES, MAX_BULLETS, PROMPT, RESTING, waitOf, repliedOf, plain };

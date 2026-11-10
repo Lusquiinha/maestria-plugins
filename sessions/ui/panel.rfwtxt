@@ -6,6 +6,7 @@ import maestria;
 widget root = Column(
   crossAxisAlignment: "stretch",
   children: [
+    Switch(),
     Top(),
     Tell(),
     Container(height: 1.0, color: data.theme.border),
@@ -45,6 +46,48 @@ widget Top = Padding(
         default: Btn(label: "aba do gerente", icon: "terminal", act: data.managerTab, kind: "sec"),
       },
     ],
+  ),
+);
+
+widget Switch = switch data.hasSwitch {
+  true: Padding(
+    padding: [14.0, 10.0, 14.0, 0.0],
+    child: Wrap(
+      spacing: 6.0,
+      runSpacing: 6.0,
+      children: [
+        ...for m in data.managers:
+          ManagerChip(m: m),
+      ],
+    ),
+  ),
+  default: SizedBox(),
+};
+
+widget ManagerChip = Pressable(
+  radius: 6.0,
+  hoverColor: data.theme.hover,
+  onTap: event "act" { a: args.m.act },
+  child: Container(
+    padding: [9.0, 4.0, 9.0, 4.0],
+    decoration: {
+      type: "box",
+      color: switch args.m.active { true: data.theme.hover, default: 0x00000000 },
+      borderRadius: [{ x: 6.0 }],
+      border: [{ color: switch args.m.active { true: args.m.color, default: data.theme.border }, width: 1.0 }],
+    },
+    child: Row(
+      mainAxisSize: "min",
+      children: [
+        Dot(color: args.m.color, size: 8.0),
+        SizedBox(width: 6.0),
+        Text(text: args.m.name, style: { fontSize: 12.0, fontWeight: switch args.m.active { true: "w600", default: "w400" }, color: data.theme.fg }),
+        switch args.m.waiting {
+          "": SizedBox(),
+          default: Padding(padding: [6.0, 0.0, 0.0, 0.0], child: Pill(text: args.m.waiting, tone: "red")),
+        },
+      ],
+    ),
   ),
 );
 

@@ -44,7 +44,7 @@ test('um cartão já respondido (action null) ainda manda a resposta nova pro te
   await handlers.req['tool.call']({ tool: 'sessions_card', tabId: 'g', args: { tabId: 'w', state: 'needs_you', action: { kind: 'question', text: 'sigo?', options: [{ label: 'sim' }] } } });
   const nodes = JSON.parse(fs.readFileSync(path.join(dataDir, 'links.json'), 'utf8')).nodes;
   const key = Object.keys(nodes).find((k) => nodes[k].tabId === 'w');
-  const act = (a, extra = {}) => handlers.note['view.action']({ viewId: `painel:${key}`, action: 'act', values: { a, ...extra } });
+  const act = (a, extra = {}) => handlers.note['view.action']({ viewId: 'painel', action: 'act', values: { a, ...extra } });
   const sent = () => calls.filter(([m]) => m === 'terminal.sendText').map(([, p]) => [p.tabId, p.text]);
   act(`option:${key}:0`);
   await tick();
@@ -57,7 +57,7 @@ test('um cartão já respondido (action null) ainda manda a resposta nova pro te
 });
 
 test('depois de abrir o painel, os refresh mandam só os dados (o template de novo zera a rolagem)', async () => {
-  const panels = () => calls.filter(([m, p]) => (m === 'view.open' || m === 'view.update') && String(p.viewId).startsWith('painel:'));
+  const panels = () => calls.filter(([m, p]) => (m === 'view.open' || m === 'view.update') && p.viewId === 'painel');
   await handlers.req['tool.call']({ tool: 'sessions_card', tabId: 'g', args: { tabId: 'w', state: 'working', headline: 'de novo' } });
   await new Promise((r) => setTimeout(r, 400));
   const all = panels();
@@ -78,7 +78,7 @@ test('a caixa do topo manda direto pro gerente e a do cartão feito abre e fecha
   const nodes = JSON.parse(fs.readFileSync(path.join(dataDir, 'links.json'), 'utf8')).nodes;
   const g = Object.keys(nodes).find((k) => nodes[k].tabId === 'g');
   const before = calls.length;
-  handlers.note['view.action']({ viewId: `painel:${g}`, action: 'act', values: { a: `tell:${g}`, text: '  como está o ceph?  ' } });
+  handlers.note['view.action']({ viewId: 'painel', action: 'act', values: { a: `tell:${g}`, text: '  como está o ceph?  ' } });
   await tick();
   const sent = calls.slice(before).filter(([m]) => m === 'terminal.sendText').map(([, p]) => [p.tabId, p.text, p.submit]);
   assert.deepEqual(sent, [['g', 'como está o ceph?', true]]);
@@ -114,9 +114,46 @@ test('mensagem pela caixa de um cartão de comando chega na aba sem apagar o com
   const read = () => JSON.parse(fs.readFileSync(path.join(dataDir, 'links.json'), 'utf8')).nodes;
   const key = Object.keys(read()).find((k) => read()[k].tabId === 'w');
   const before = calls.length;
-  handlers.note['view.action']({ viewId: `painel:${key}`, action: 'act', values: { a: `message:${key}`, text: 'olha os logs antes' } });
+  handlers.note['view.action']({ viewId: 'painel', action: 'act', values: { a: `message:${key}`, text: 'olha os logs antes' } });
   await tick();
   assert.deepEqual(calls.slice(before).filter(([m]) => m === 'terminal.sendText').map(([, p]) => [p.tabId, p.text]), [['w', 'olha os logs antes']]);
   const card = read()[key].card;
   assert.deepEqual([card.state, card.headline, card.action.text, card.answered.text, card.answered.message], ['needs_you', 'rode isso', 'make deploy', 'olha os logs antes', true]);
+});
+
+test('um painel só: trocar de gerente atualiza o mesmo painel, e o cartão de outro gerente não o tira de quem você olha', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sessions-main-'));
+  handlers.req.initialize({ dataDir });
+  sessions.push({ id: 'h', kind: 'claude', title: 'h', status: 'idle' }, { id: 'h2', kind: 'claude', title: 'h2', status: 'tool' });
+  try {
+    await handlers.req['tool.call']({ tool: 'sessions_card', tabId: 'g', args: { tabId: 'w', state: 'working' } });
+    await tick();
+    const nodes = () => JSON.parse(fs.readFileSync(path.join(dataDir, 'links.json'), 'utf8')).nodes;
+    const keyOf = (tab) => Object.keys(nodes()).find((k) => nodes()[k].tabId === tab);
+    const shown = () => {
+      const last = calls.filter(([m, p]) => (m === 'view.open' || m === 'view.update') && p.viewId === 'painel' && p.data).pop();
+      return last && last[1].data.name;
+    };
+    handlers.note['view.action']({ viewId: 'sidebar', action: `panel:${keyOf('g')}` });
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(shown(), 'g');
+    await handlers.req['tool.call']({ tool: 'sessions_card', tabId: 'h', args: { tabId: 'h2', state: 'working' } });
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(shown(), 'g');
+    const before = calls.length;
+    handlers.note['view.action']({ viewId: 'painel', action: 'act', values: { a: `switch:${keyOf('h')}` } });
+    await new Promise((r) => setTimeout(r, 400));
+    const mine = calls.slice(before).filter(([m, p]) => p && p.viewId === 'painel');
+    assert.ok(mine.length > 0 && mine.every(([m]) => m === 'view.update'));
+    assert.equal(shown(), 'h');
+    const chips = mine.pop()[1].data.managers;
+    assert.deepEqual(chips.map((m) => [m.name, m.active, m.act]), [['g', false, `switch:${keyOf('g')}`], ['h', true, `switch:${keyOf('h')}`]]);
+    const raised = calls.length;
+    handlers.note['view.action']({ viewId: 'sidebar', action: `panel:${keyOf('g')}` });
+    await new Promise((r) => setTimeout(r, 400));
+    assert.ok(calls.slice(raised).some(([m, p]) => m === 'view.open' && p.viewId === 'painel'));
+    assert.equal(shown(), 'g');
+  } finally {
+    sessions.splice(2);
+  }
 });
