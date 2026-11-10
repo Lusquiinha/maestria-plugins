@@ -313,3 +313,16 @@ test('todas: o gerente vira conversa direta (sem cartão), o cartão de aba fech
   assert.deepEqual(c.done.map((x) => [x.title, x.age]), [['usada', '']]);
   assert.equal(managers(l, sessions, ALL)[0].waiting, '1');
 });
+
+test('cartão "feito" de uma sessão que voltou a rodar aparece em Trabalhando', () => {
+  assert.equal(stateOf({ state: 'done' }, { status: 'working' }), 'working');
+  assert.equal(stateOf({ state: 'done' }, { status: 'tool' }), 'working');
+  assert.equal(stateOf({ state: 'done' }, { status: 'idle' }), 'done');
+  assert.equal(stateOf({ state: 'done' }, null), 'done');
+  assert.equal(stateOf({ state: 'needs_you' }, { status: 'tool' }), 'needs_you');
+  const { l, g, kid } = setup();
+  kid('w', { state: 'done', headline: 'PR aberto', at: NOW, doneAt: NOW });
+  const c = cols(board(l, g, [{ id: 'g' }, { id: 'w', title: 'w', status: 'tool', activity: { lastTool: 'Bash npm test' } }], {}, NOW));
+  assert.deepEqual(c.working.map((x) => [x.title, x.hasLive]), [['w', true]]);
+  assert.equal(c.done.length, 0);
+});
