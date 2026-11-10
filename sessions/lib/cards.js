@@ -39,6 +39,8 @@ function repliedOf(card, session) {
 function stateOf(card, session) {
   if (session && session.needsYou) return 'needs_you';
   if (repliedOf(card, session)) return 'needs_you';
+  const running = Boolean(session) && !RESTING.has(session.status) && session.status !== 'unknown';
+  if (card && card.state === 'done' && running) return 'working';
   if (card && card.state) return card.state;
   if (!session) return 'done';
   return session.status === 'idle' || session.status === 'ready' ? 'done' : 'working';
