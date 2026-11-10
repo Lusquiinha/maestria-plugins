@@ -47,7 +47,7 @@ test('sessions_open abre em segundo plano, com a cor de quem chama no nome e o p
 test('quem chama vira gerente: a aba dele ganha a cor, e a nova fica ligada a ele', async () => {
   const ctx = makeCtx();
   await tools.handle('sessions_open', { cwd: '/srv/app', name: 'a' }, ctx);
-  assert.deepEqual(ctx.calls.find((c) => c.method === 'session.rename').params, { tabId: 'me', title: '● coordenador' });
+  assert.deepEqual(ctx.calls.find((c) => c.method === 'session.rename').params, { tabId: 'me', title: '●● coordenador' });
   const me = ctx.links.byTab('me');
   const child = ctx.links.byTab('tab9');
   assert.equal(ctx.links.nodes[me].manager, true);

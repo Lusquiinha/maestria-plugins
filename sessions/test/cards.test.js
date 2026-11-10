@@ -240,3 +240,34 @@ test('resposta longa: o cartão mostra o começo e oferece a inteira no cartão 
   assert.deepEqual([by.a.replyLong, by.b.replyLong, by.c.replyLong], [true, false, true]);
   assert.equal(by.a.acts.detail, `detail:${by.a.key}`);
 });
+
+test('cartão "trabalhando" cuja sessão parou depois dele vai pra Precisa de você; o que o gerente escreveu depois fica', () => {
+  const { l, g, kid } = setup();
+  kid('s', { state: 'working', headline: 'rodando a suíte', at: 100 });
+  kid('p', { state: 'working', headline: 'pausada: esperando a NinePay', at: 300 });
+  const sessions = [
+    { id: 'g' },
+    { id: 's', title: 's', status: 'idle', reply: { text: 'suíte verde', at: 200 } },
+    { id: 'p', title: 'p', status: 'idle', reply: { text: 'parei', at: 200 } },
+  ];
+  const c = cols(board(l, g, sessions, {}, NOW));
+  assert.deepEqual(c.needs_you.map((x) => [x.title, x.kind, x.headline, x.context, x.reply]), [['s', 'reply', 'Parou, esperando você.', 'rodando a suíte', 'suíte verde']]);
+  assert.deepEqual(c.working.map((x) => x.title), ['p']);
+});
+
+test('todo cartão com sessão viva tem caixa de mensagem; o feito só abre a caixa quando pedida; o topo fala com o gerente', () => {
+  const { l, g, kid } = setup();
+  const w = kid('w', { state: 'working', at: 1 });
+  kid('q', { state: 'needs_you', action: { kind: 'question', text: 'sigo?' }, at: 1 });
+  const d = kid('d', { state: 'done', at: 1, doneAt: NOW });
+  kid('x', { state: 'working', at: 1 });
+  const sessions = [{ id: 'g', title: 'g' }, { id: 'w', title: 'w', status: 'tool' }, { id: 'q', title: 'q', status: 'idle' }, { id: 'd', title: 'd', status: 'idle' }];
+  const ui = { writing: { [d]: true } };
+  const b = board(l, g, sessions, ui, NOW);
+  const all = Object.fromEntries(b.cols.flatMap((c) => c.cards).map((c) => [c.title, c]));
+  assert.deepEqual(['w', 'q', 'd', 'x'].map((t) => all[t].canMessage), [true, false, true, false]);
+  assert.deepEqual([all.w.writing, all.d.writing], [false, true]);
+  assert.equal(all.w.acts.write, `write:${w}`);
+  assert.deepEqual([b.canTell, b.tell.input, b.tell.act], [true, `tell-${g}`, `tell:${g}`]);
+  assert.equal(board(l, g, sessions.slice(1), {}, NOW).canTell, false);
+});

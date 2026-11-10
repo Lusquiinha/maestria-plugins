@@ -26,13 +26,16 @@ const shownLines = (text) => text.split('\n').reduce((n, l) => n + Math.max(1, M
 
 const plain = (text) => String(text || '').replace(/^#{1,6} +/gm, '').replace(/\*\*|__|`/g, '');
 
-/** A resposta da sessão a uma resposta sua: ela fechou o turno depois que você respondeu pelo cartão. */
+/** A sessão fechou o turno depois do último cartão (ou da sua resposta) e ficou parada: está esperando você. */
 function repliedOf(card, session) {
-  if (!card || !card.answered || !session || session.needsYou || !RESTING.has(session.status)) return null;
+  if (!card || !session || session.needsYou || !RESTING.has(session.status)) return null;
+  if (card.state !== 'working' && !card.answered) return null;
+  const after = Math.max(card.at || 0, (card.answered && card.answered.at) || 0);
   const r = session.reply;
-  return r && r.text && r.at > card.answered.at ? r : null;
+  return r && r.text && r.at > after ? r : null;
 }
 
+/** O estado que vale: a sessão esperando você ganha do que o gerente escreveu. */
 function stateOf(card, session) {
   if (session && session.needsYou) return 'needs_you';
   if (repliedOf(card, session)) return 'needs_you';
@@ -55,7 +58,7 @@ function ago(ms, now) {
 }
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const liveOf = (sessions) => new Map(sessions.filter((s) => !s.exited).map((s) => [s.id, s]));
-const UI = () => ({ picked: {}, rejecting: {}, clears: {}, open: {}, playing: null });
+const UI = () => ({ picked: {}, rejecting: {}, clears: {}, open: {}, writing: {}, playing: null });
 
 /** Tira o "TASK#123" do começo do título: ele já vai na coluna do número. */
 function split(title, task) {
@@ -116,7 +119,7 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
   const playing = ui.playing && ui.playing.key === key ? ui.playing.id : null;
   const headline =
     (tabAsks && waitOf(session)) ||
-    (replied && 'Respondeu, esperando você.') ||
+    (replied && (c.answered ? 'Respondeu, esperando você.' : 'Parou, esperando você.')) ||
     c.headline ||
     (kind === 'question' || kind === 'approve' ? action.text : '') ||
     (kind === 'command' ? (target ? `Rode na aba ${bare(target.title)}.` : 'Rode este comando.') : '') ||
@@ -131,7 +134,7 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
     color: hex(colorOf(node.color).hex),
     age: state === 'needs_you' ? ago(since, now) : state === 'working' ? `desde ${clock(since)}` : clock(c.doneAt || c.at || now),
     headline,
-    context: replied ? `Você respondeu: ${c.answered.text}` : c.headline && (kind === 'question' || kind === 'approve') ? action.text : '',
+    context: replied ? (c.answered ? `${c.answered.message ? 'Você escreveu' : 'Você respondeu'}: ${c.answered.text}` : c.headline || '') : c.headline && (kind === 'question' || kind === 'approve') ? action.text : '',
     reply: replied ? plain(replied.text) : '',
     replyLong: Boolean(replied) && shownLines(plain(replied.text)) > REPLY_LINES,
     hasHeadline: Boolean(headline),
@@ -164,6 +167,8 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
     canUse: audible && picked != null && Boolean(options[picked]),
     rejecting: Boolean(ui.rejecting[key]),
     input: `answer-${key}`,
+    canMessage: Boolean(session) && !['question', 'approve', 'reply'].includes(kind),
+    writing: Boolean(ui.writing && ui.writing[key]),
     clear: ui.clears[key] || 0,
     live: state === 'working' ? plain(activity.lastTool || activity.lastMessage).slice(0, 140) : '',
     hasLive: state === 'working' && Boolean(activity.lastTool || activity.lastMessage),
@@ -180,6 +185,8 @@ function cardData({ key, node, session, card }, live, ui, now, thumbs = null) {
       send: `send:${key}`,
       copy: `copy:${key}`,
       answer: `answer:${key}`,
+      write: `write:${key}`,
+      message: `message:${key}`,
       approve: `approve:${key}`,
       reject: `reject:${key}`,
       use: `use:${key}`,
@@ -219,6 +226,8 @@ function board(links, key, sessions, ui = {}, now = Date.now()) {
     total: `${all.length} ${all.length === 1 ? 'sessão' : 'sessões'}`,
     color: hex(colorOf(manager.color).hex),
     managerTab: me ? `focus:${me.id}` : '',
+    tell: { input: `tell-${key}`, act: `tell:${key}`, clear: u.clears[`tell-${key}`] || 0 },
+    canTell: Boolean(me),
     cols: COLUMNS.map((col) => {
       const list = cards.filter((c) => c.state === col.state);
       return { ...col, count: String(list.length), cards: list, isEmpty: list.length === 0 };

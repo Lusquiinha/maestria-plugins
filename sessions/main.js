@@ -8,7 +8,7 @@ const mx = require('./maestria');
 const tools = require('./lib/tools');
 const { Links, tinted, bare } = require('./lib/links');
 const { sidebar } = require('./lib/tree');
-const { panel, detail, RESTING } = require('./lib/cards');
+const { panel, detail, RESTING, PROMPT } = require('./lib/cards');
 const { deliver } = require('./lib/answers');
 const { replies } = require('./lib/replies');
 
@@ -28,8 +28,9 @@ const state = {
   probed: false,
   modal: null,
   live: {},
-  ui: { picked: {}, rejecting: {}, clears: {}, open: {}, unfolded: {}, showOld: false, playing: null },
+  ui: { picked: {}, rejecting: {}, clears: {}, open: {}, writing: {}, unfolded: {}, showOld: false, playing: null },
   titles: new Map(),
+  retitled: new Map(),
 };
 const PANEL = 'painel:';
 const CARD = 'cartao:';
@@ -92,6 +93,16 @@ async function refresh() {
       fs.writeFileSync(state.file, JSON.stringify(state.links.toJSON()));
     } catch {}
   }
+  const wrong = state.links.retitles(sessions);
+  for (const tabId of [...state.retitled.keys()]) if (!wrong.some((w) => w.tabId === tabId)) state.retitled.delete(tabId);
+  await Promise.all(
+    wrong
+      .filter(({ tabId, title }) => state.retitled.get(tabId) !== title)
+      .map(({ tabId, title }) => {
+        state.retitled.set(tabId, title);
+        return mx.request('session.rename', { tabId, title }).catch((e) => mx.log('rename:', e.message));
+      }),
+  );
   await mx.request('sidebar.update', sidebar(state.links, sessions, state.ui));
   if (!state.probed) {
     state.probed = true;
@@ -142,18 +153,35 @@ function schedule() {
   }, 300);
 }
 
+const OTHER = ':outra-pasta';
+
+/** Pede um caminho até ser uma pasta que existe; null se cancelar. */
+async function askFolder() {
+  let value = '';
+  for (;;) {
+    const typed = await mx.request('window.input', { title: 'novo gerente: caminho da pasta', placeholder: '~/projetos/x ou /var/www/x', value });
+    value = String(typed || '').trim();
+    if (!value) return null;
+    const dir = path.resolve(os.homedir(), value.replace(/^~(?=$|\/)/, os.homedir()));
+    if (isDir(dir)) return dir;
+    await mx.request('window.showBanner', { text: `não é uma pasta: ${dir}` }).catch(() => {});
+  }
+}
+
 async function createManager(context = {}) {
   const folders = (await mx.request('folders.list').catch(() => [])) || [];
   const items = folders.map((f) => ({ value: f.root, label: f.name || path.basename(f.root), detail: f.root }));
   if (context.cwd && !items.some((i) => i.value === context.cwd)) items.unshift({ value: context.cwd, label: path.basename(context.cwd), detail: context.cwd });
-  const cwd = await mx.request('window.pick', { title: 'novo gerente: pasta', items });
+  items.push({ value: OTHER, label: 'outra pasta…', detail: 'digitar o caminho' });
+  const picked = await mx.request('window.pick', { title: 'novo gerente: pasta', items });
+  const cwd = picked === OTHER ? await askFolder() : picked;
   if (!cwd) return;
   const name = await mx.request('window.input', { title: 'novo gerente: nome', placeholder: 'ex.: tarefas do Wiboor' });
   if (!name) return;
   const ask = await mx.request('window.input', { title: 'novo gerente: primeiro pedido', placeholder: 'o que ele deve coordenar (vazio: só abre)' }).catch(() => null);
   const key = state.links.add({ tabId: null, name, manager: true });
   const node = state.links.nodes[key];
-  const params = { cwd, label: tinted(name, node.color), prompt: ask ? `${MANAGER_BRIEF}\n\nPedido: ${ask}` : MANAGER_BRIEF };
+  const params = { cwd, label: tinted(name, node.color, true), prompt: ask ? `${MANAGER_BRIEF}\n\nPedido: ${ask}` : MANAGER_BRIEF };
   try {
     const { tabId } = await mx.request('session.openClaude', params);
     node.tabId = tabId;
@@ -239,15 +267,31 @@ function toggleAudio(key, kind, i) {
   return schedule();
 }
 
-async function answer(key, text) {
+async function answer(key, text, message = false) {
   stopAudio();
-  const { via, title } = await deliver(key, text, { links: state.links, request: mx.request, sessions: await listSessions() });
+  const { via, title } = await deliver(key, text, { links: state.links, request: mx.request, sessions: await listSessions(), message });
   delete state.ui.picked[key];
   delete state.ui.rejecting[key];
+  delete state.ui.writing[key];
   state.ui.clears[key] = (state.ui.clears[key] || 0) + 1;
   save();
   const where = via === 'terminal' ? title : 'o gerente (a aba está num prompt)';
-  return mx.request('window.showBanner', { text: `resposta enviada para ${where}` }).catch(() => {});
+  return mx.request('window.showBanner', { text: `enviado para ${where}` }).catch(() => {});
+}
+
+/** Manda [text] direto pro gerente do painel [key]. */
+async function tell(key, text) {
+  const body = String(text || '').trim();
+  const node = state.links.nodes[key];
+  if (!body || !node) return null;
+  const m = (await listSessions()).find((s) => s.id === node.tabId && !s.exited);
+  if (!m) throw new Error('a aba do gerente está fechada');
+  if (m.hibernated || PROMPT.has(m.status)) throw new Error('o gerente está num prompt: responda na aba dele');
+  await mx.request('terminal.sendText', { tabId: m.id, text: body, submit: true });
+  const clear = `tell-${key}`;
+  state.ui.clears[clear] = (state.ui.clears[clear] || 0) + 1;
+  schedule();
+  return mx.request('window.showBanner', { text: `enviado para ${bare(m.title)}` }).catch(() => {});
 }
 
 /** As ações de um cartão; [values] traz o texto de um campo. */
@@ -262,10 +306,16 @@ async function onCard(verb, key, rest, values) {
   if (verb === 'detail') return openCard(key);
   if (verb === 'notes') return flip(state.ui.open);
   if (verb === 'reject') return flip(state.ui.rejecting);
+  if (verb === 'write') return flip(state.ui.writing);
+  if (verb === 'tell') return tell(key, values && values.text);
   if (verb === 'play') return toggleAudio(key, rest[0], Number(rest[1]));
   if (verb === 'pick') {
     state.ui.picked[key] = Number(rest[0]);
     return schedule();
+  }
+  if (verb === 'message') {
+    const text = String((values && values.text) || '').trim();
+    return text ? answer(key, text, true) : null;
   }
   if (verb === 'answer') {
     const text = String((values && values.text) || '').trim();
@@ -310,11 +360,11 @@ async function retitle(keys) {
   for (const key of keys) {
     const n = state.links.nodes[key];
     const s = n && sessions.find((x) => x.id === n.tabId);
-    if (s) await mx.request('session.rename', { tabId: s.id, title: tinted(s.title, n.color) }).catch((e) => mx.log('rename:', e.message));
+    if (s) await mx.request('session.rename', { tabId: s.id, title: tinted(s.title, n.color, n.manager) }).catch((e) => mx.log('rename:', e.message));
   }
 }
 
-const CARD_VERBS = ['detail', 'notes', 'reject', 'play', 'pick', 'send', 'copy', 'option', 'use', 'approve', 'answer'];
+const CARD_VERBS = ['detail', 'notes', 'reject', 'write', 'tell', 'message', 'play', 'pick', 'send', 'copy', 'option', 'use', 'approve', 'answer'];
 
 async function onAction(act, values) {
   const [verb, a, b, ...more] = act.split(':');
